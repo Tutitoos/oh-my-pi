@@ -117,6 +117,40 @@ describe("AgentSession manual compaction lifecycle events", () => {
 		expect(end.errorMessage).toBeUndefined();
 	});
 
+	it("marks both halves of the bracket manual, so a front-end can stand down on either", async () => {
+		/*
+		 * These events go out on the session bus, which reaches every front-end —
+		 * not just the RPC client they were added for. The TUI's `/compact` owns its
+		 * own status line and its own repaint, so it ignores `reason: "manual"`; it
+		 * can only do that if the *end* carries the reason too. Pairing by arrival
+		 * order is not something a bus with several consumers can offer.
+		 */
+		const harness = await createHarness(["soft"]);
+		vi.spyOn(compactionModule, "compact").mockImplementation(async preparation => ({
+			summary: "s",
+			shortSummary: "s",
+			firstKeptEntryId: preparation.firstKeptEntryId,
+			tokensBefore: 10,
+		}));
+
+		await harness.session.compact();
+
+		expect(harness.events.map(event => (event as { reason?: string }).reason)).toEqual(["manual", "manual"]);
+	});
+
+	it("a failed manual pass still says it was manual", async () => {
+		const harness = await createHarness(["soft"]);
+		vi.spyOn(compactionModule, "compact").mockImplementation(async () => {
+			throw new Error("no");
+		});
+
+		await harness.session.compact().catch(() => {});
+
+		const end = harness.events.at(-1) as { type: string; reason?: string };
+		expect(end.type).toBe("auto_compaction_end");
+		expect(end.reason).toBe("manual");
+	});
+
 	it("reports a failure as an end, not as silence", async () => {
 		const harness = await createHarness(["soft"]);
 		vi.spyOn(compactionModule, "compact").mockImplementation(async () => {

@@ -1082,6 +1082,7 @@ export class SessionMaintenance {
 					{
 						type: "auto_compaction_end",
 						action: selectedMethod,
+						reason: "manual",
 						result: compactionResult,
 						// The one number the operator wants, and the one
 						// `CompactionResult` does not carry: it is computed at commit.
@@ -1126,6 +1127,7 @@ export class SessionMaintenance {
 						{
 							type: "auto_compaction_end",
 							action: selectedMethod ?? "context-full",
+							reason: "manual",
 							result: fallbackResult,
 							tokensAfter: this.#host.getContextUsage()?.tokens,
 							aborted: false,
@@ -1143,6 +1145,7 @@ export class SessionMaintenance {
 					{
 						type: "auto_compaction_end",
 						action: selectedMethod ?? "context-full",
+						reason: "manual",
 						result: undefined,
 						aborted: cancelled,
 						willRetry: false,

@@ -33,6 +33,15 @@ export type AgentSessionEvent =
 	| {
 			type: "auto_compaction_end";
 			action: "context-full" | "remote" | "handoff" | "shake" | "snapcompact" | "soft";
+			/**
+			 * Why the pass ran, echoed from its `auto_compaction_start`.
+			 *
+			 * Optional because it arrived after the event did. A consumer that has to
+			 * tell a user-initiated pass from one the engine started needs it on both
+			 * halves: the TUI stands down for `manual` on either, and pairing by
+			 * arrival order is not something a bus with several front-ends can offer.
+			 */
+			reason?: "threshold" | "overflow" | "idle" | "incomplete" | "manual";
 			result: CompactionResult | undefined;
 			/**
 			 * Context tokens after the rewrite. `CompactionResult` carries only
