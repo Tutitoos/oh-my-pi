@@ -1,0 +1,75 @@
+/**
+ * Palette, read from a screenshot of opencode's TUI (1.18.20).
+ *
+ * These are NOT opencode's published values. Their default theme's primary is
+ * orange (#fab283) and none of their 37 themes matches this blue exactly, so
+ * everything here is sampled by eye from the image. Each value is on its own
+ * line precisely so a wrong one is a one-line correction.
+ *
+ * Sits in the `app` layer — the last one — so it overrides theme.css without
+ * editing a single vendored file.
+ */
+
+:root {
+	color-scheme: dark;
+
+	/* --- surfaces ------------------------------------------------------- */
+	/* Near-black, not pure: pure #000 makes the blue vibrate on an OLED. */
+	--background-base: #0d0d0d;
+	/* The user's block and the composer sit one step up from the ground. */
+	--background-weak: #161616;
+	--background-strong: #0d0d0d;
+	--background-stronger: #111111;
+
+	/* --- text ----------------------------------------------------------- */
+	/* Off-white. #fff at this size on this ground reads as glare. */
+	--text-strong: #e8e8e8;
+	--text-stronger: #f2f2f2;
+	--text-base: #b4b4b4;
+	--text-weak: #7d7d7d;
+	--text-weaker: #5a5a5a;
+
+	/* --- lines ---------------------------------------------------------- */
+	/* Barely there. In this design separation comes from space, not rules. */
+	--border-base: rgb(255 255 255 / 7%);
+	--border-focus: rgb(255 255 255 / 22%);
+
+	/* --- accents, used sparingly ---------------------------------------- */
+	/* Blue means "yours" or "active": the left bars, the tool square. */
+	--text-interactive-base: #4a8cff;
+	--icon-success-base: #3fb950;
+	--icon-warning-base: #d29922;
+	--icon-critical-base: #f85149;
+	--surface-critical-base: rgb(248 81 73 / 12%);
+
+	/* --- diff ----------------------------------------------------------- */
+	--text-diff-add-base: #7ee787;
+	--text-diff-add-strong: #3fb950;
+	--text-diff-delete-base: #ffa198;
+	--text-diff-delete-strong: #f85149;
+
+	/* --- type ------------------------------------------------------------ */
+	/*
+	 * Mono everywhere, including the chrome. Mapping `sans` to the mono stack
+	 * carries the change into the vendored component CSS without touching it.
+	 */
+	--font-family-mono: ui-monospace, "SF Mono", "Menlo", "Cascadia Mono", monospace;
+	--font-family-sans: var(--font-family-mono);
+	--font-size-base: 13px;
+	--font-size-small: 12px;
+	--font-size-large: 15px;
+	--font-size-x-large: 18px;
+
+	/* --- geometry -------------------------------------------------------- */
+	/* One knob for the whole app's flatness. */
+	--omp-radius: 0px;
+	/* Width of the accent bar that marks your turn and the input. */
+	--omp-bar: 2px;
+	/*
+	 * How far the main column holds its content off the window frame on a side
+	 * with no panel open. Resolved per side into `--omp-gutter-start` and
+	 * `--omp-gutter-end` by the shell, which is the only thing that knows which
+	 * panels are up.
+	 */
+	--omp-gutter: 12px;
+}

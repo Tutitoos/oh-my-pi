@@ -1,0 +1,13 @@
+{
+	"$schema": "../gen/schemas/desktop-schema.json",
+	"identifier": "default",
+	"description": "Core permissions for the main window, plus the folder picker and the title bar's drag region. The omp sidecar is owned entirely by Rust, so no shell:* permission is granted — the webview must not be able to spawn it directly and bypass the relay.",
+	"windows": [
+		"main"
+	],
+	"permissions": [
+		"core:default",
+		"dialog:allow-open",
+		"core:window:allow-start-dragging"
+	]
+}

@@ -1,0 +1,38 @@
+/**
+ * Style entry point.
+ *
+ * Layer order matters and is declared up front so imports cannot reorder it:
+ * later layers win regardless of specificity, which is what lets app.css
+ * override a vendored rule without selector arms races.
+ */
+
+@layer theme, base, vendor-components, tool-render, app;
+
+/*
+ * opencode's token foundation — vendored, MIT. See src/styles/vendor/opencode/.
+ * Kept because `base.css`, `diff-changes.css` and omp's tool renderers all
+ * resolve against these ~586 variables; palette.css then overrides the ~30 the
+ * app actually shows.
+ */
+@import "./vendor/opencode/colors.css" layer(theme);
+@import "./vendor/opencode/theme.css" layer(theme);
+@import "./vendor/opencode/base.css" layer(base);
+
+/* Aliases that point omp's tool renderers at the palette. */
+@import "./tv-bridge.css" layer(theme);
+
+/*
+ * Only `diff-changes` survives of the 25 vendored component stylesheets: the
+ * flat terminal look has no cards, dialogs, tabs, selects, toasts or popovers,
+ * and its buttons are plain rules in app.css rather than the three-attribute
+ * contract (`data-component` + `data-variant` + `data-size`) opencode's need.
+ * The other 24 were 148 KB with no consumer.
+ */
+@import "./vendor/opencode/components/diff-changes.css" layer(vendor-components);
+
+/* omp's per-tool renderers, themed through tv-bridge.css above. */
+@import "@oh-my-pi/collab-web/src/tool-render/tool-render.css" layer(tool-render);
+
+/* Ours. palette.css last in `theme` so it wins over the vendored tokens. */
+@import "./palette.css" layer(theme);
+@import "./app.css" layer(app);
