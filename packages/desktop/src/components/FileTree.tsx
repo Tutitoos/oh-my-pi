@@ -1,3 +1,4 @@
+import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { memo, type MouseEvent as ReactMouseEvent, useCallback, useEffect, useMemo, useState } from "react";
 import type { RpcBridge } from "../rpc/bridge";
 import { writeClipboard } from "../shell/clipboard";
@@ -80,7 +81,6 @@ export function FileTree({ bridge, ready }: { bridge: RpcBridge; ready: boolean 
 	const open = useCallback(
 		async (path: string) => {
 			if (!repoRoot) return;
-			const { openPath } = await import("@tauri-apps/plugin-opener");
 			try {
 				await openPath(absolute(repoRoot, path));
 			} catch (cause) {
@@ -91,17 +91,20 @@ export function FileTree({ bridge, ready }: { bridge: RpcBridge; ready: boolean 
 	);
 
 	const menu = useCallback(
-		(event: ReactMouseEvent, path: string) => {
+		(event: ReactMouseEvent, path: string, isDirectory: boolean) => {
 			if (!repoRoot) return;
 			const full = absolute(repoRoot, path);
+			const fail = (cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause));
 			openMenu(
 				event,
 				fileMenuItems({
 					relative: path,
 					absolute: full,
-					open: () => void open(path),
-					reveal: () => void revealFile(full).catch(cause => setError(String(cause))),
-					copy: text => void writeClipboard(text).catch(cause => setError(String(cause))),
+					// A folder has nothing to open in an editor, and offering it would
+					// promise something the click cannot deliver.
+					open: isDirectory ? undefined : () => void open(path),
+					reveal: () => void revealFile(full, isDirectory).catch(fail),
+					copy: text => void writeClipboard(text).catch(fail),
 				}),
 			);
 		},
@@ -167,7 +170,7 @@ const TreeLevel = memo(function TreeLevel({
 	forceOpen: boolean;
 	onToggle(path: string): void;
 	onOpen(path: string): void;
-	onMenu(event: ReactMouseEvent, path: string): void;
+	onMenu(event: ReactMouseEvent, path: string, isDirectory: boolean): void;
 }) {
 	const children = [...node.children.values()].sort(directoriesFirst);
 
@@ -185,6 +188,7 @@ const TreeLevel = memo(function TreeLevel({
 							style={{ paddingLeft: 8 + depth * 12 }}
 							title={child.path}
 							onClick={() => (isDirectory ? onToggle(child.path) : onOpen(child.path))}
+							onContextMenu={event => onMenu(event, child.path, isDirectory)}
 						>
 							<span className="omp-tree__twisty" aria-hidden="true">
 								{isDirectory ? (isOpen ? "▾" : "▸") : ""}
@@ -239,7 +243,10 @@ export function buildTree(paths: readonly string[]): TreeNode {
 }
 
 /** Show a file in Finder, selected inside its folder rather than opened. */
-async function revealFile(path: string): Promise<void> {
-	const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
-	await revealItemInDir(path);
+async function revealFile(path: string, isDirectory: boolean): Promise<void> {
+	// A folder is opened; a file is selected inside its parent. `revealItemInDir`
+	// on a directory shows the directory's own parent, which is not what the row
+	// you clicked was pointing at.
+	if (isDirectory) return openPath(path);
+	return revealItemInDir(path);
 }

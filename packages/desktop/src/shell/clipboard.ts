@@ -1,3 +1,5 @@
+import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
+
 /**
  * The system clipboard, through Rust.
  *
@@ -7,12 +9,10 @@
  * neither permission prompts nor user-activation heuristics apply.
  */
 export async function writeClipboard(text: string): Promise<void> {
-	const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
 	await writeText(text);
 }
 
 export async function readClipboard(): Promise<string> {
-	const { readText } = await import("@tauri-apps/plugin-clipboard-manager");
 	return (await readText()) ?? "";
 }
 
@@ -48,4 +48,24 @@ export function fieldSelection(field: HTMLInputElement | HTMLTextAreaElement): s
  */
 export function insertText(text: string): void {
 	document.execCommand("insertText", false, text);
+}
+
+/**
+ * Put the caret back where the menu found it, then type.
+ *
+ * `execCommand` edits whatever is focused *now*, and by the time a menu item
+ * runs the menu has closed and the focus may have gone with it — the field the
+ * menu was built for is no longer the one being edited, so Cut deleted nothing
+ * and Paste landed nowhere. The selection has to be restored too: refocusing a
+ * textarea does not bring back the range the user had highlighted, and Cut is
+ * defined entirely by that range.
+ */
+export function editField(
+	field: HTMLInputElement | HTMLTextAreaElement,
+	range: { start: number; end: number },
+	text: string,
+): void {
+	field.focus();
+	field.setSelectionRange(range.start, range.end);
+	insertText(text);
 }

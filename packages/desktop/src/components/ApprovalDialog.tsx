@@ -47,8 +47,8 @@ export function ApprovalDialog({ request, bridge }: { request: ExtensionUiReques
 			// Wrapping: reaching the last item from the top is one press, not four.
 			rows[(current + step + rows.length) % rows.length]?.focus();
 		};
-		window.addEventListener("keydown", onKey);
-		return () => window.removeEventListener("keydown", onKey);
+		document.addEventListener("keydown", onKey);
+		return () => document.removeEventListener("keydown", onKey);
 	}, [bridge, request.id, request.method, request.options]);
 
 	// The server resolves to a default when its own timeout fires, so Escape
@@ -62,8 +62,8 @@ export function ApprovalDialog({ request, bridge }: { request: ExtensionUiReques
 			event.preventDefault();
 			bridge.answerUi({ id: request.id, cancelled: true });
 		};
-		window.addEventListener("keydown", onKey);
-		return () => window.removeEventListener("keydown", onKey);
+		document.addEventListener("keydown", onKey);
+		return () => document.removeEventListener("keydown", onKey);
 	}, [bridge, request.id]);
 
 	const title = request.title ?? defaultTitle(request.method);

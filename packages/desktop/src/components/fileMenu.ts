@@ -14,17 +14,19 @@ export function fileMenuItems(input: {
 	absolute: string;
 	/** Only Changes has one; the tree passes nothing. */
 	copyDiff?: () => void;
-	open(): void;
+	/** Absent for a folder, which has nothing to open in an editor. */
+	open?: () => void;
 	reveal(): void;
 	copy(text: string): void;
 }): MenuItem[] {
-	const items: MenuItem[] = [
-		{ kind: "action", id: "open", label: "Open in editor", run: input.open },
+	const items: MenuItem[] = [];
+	if (input.open) items.push({ kind: "action", id: "open", label: "Open in editor", run: input.open });
+	items.push(
 		{ kind: "action", id: "reveal", label: "Reveal in Finder", run: input.reveal },
 		{ kind: "separator", id: "sep" },
 		{ kind: "action", id: "copy-rel", label: "Copy relative path", run: () => input.copy(input.relative) },
 		{ kind: "action", id: "copy-abs", label: "Copy absolute path", run: () => input.copy(input.absolute) },
-	];
+	);
 
 	if (input.copyDiff) {
 		items.push({ kind: "action", id: "copy-diff", label: "Copy the file's diff", run: input.copyDiff });

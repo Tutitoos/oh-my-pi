@@ -20,6 +20,15 @@ export interface UseBridgeResult {
 	restart(): Promise<void>;
 }
 
+/**
+ * Boot steps report rather than vanish. Each is idempotent and non-fatal, so the
+ * boot continues — but a swallowed failure here is how a tab ends up blank with
+ * nothing anywhere saying why.
+ */
+function reportBootFailure(cause: unknown): void {
+	console.warn("omp: a session boot step failed", cause);
+}
+
 export function useBridge(
 	tabId: string,
 	options: {
@@ -60,19 +69,32 @@ export function useBridge(
 		await bridge.getState().catch(() => {});
 		await bridge.getAvailableCommands().catch(() => {});
 		await bridge.setSubagentSubscription("events").catch(() => {});
-		// switchSession pulls the history itself; a tab with no session file is
-		// a fresh one and has none.
-		if (sessionPath) await bridge.switchSession(sessionPath).catch(() => {});
 		/*
-		 * A re-attached process, on the other hand, has a conversation and no file
-		 * to replay it from — the tab never knew one. Without this it renders "Ask
-		 * the agent something to get started" over a live session, and the next
-		 * thing typed lands in a transcript nobody can see.
+		 * Switch only into a process that was just spawned.
 		 *
-		 * A tab id is unique per chat now, so this should only happen when a
-		 * webview reload finds its sidecars still in the Rust pool. Belt and
-		 * braces: silence is the failure mode that hid this for hours.
-		 */ else if (handle?.resumed) await bridge.loadHistory().catch(() => {});
+		 * `switch_session` aborts the session — this file says so four lines down.
+		 * A resumed process is already on this session, so switching into it again
+		 * aborts a turn that is very likely running: leaving the session route and
+		 * coming back remounts the view, which mints a new `RpcBridge`, which
+		 * re-runs this boot. Going to Settings mid-turn and returning killed the
+		 * turn.
+		 */
+		if (sessionPath && !handle?.resumed) {
+			await bridge.switchSession(sessionPath).catch(reportBootFailure);
+		} else if (handle?.resumed) {
+			/*
+			 * A re-attached process has a conversation and this bridge has an empty
+			 * transcript, so it has to be re-read — otherwise the tab renders "Ask
+			 * the agent something to get started" over a live session and the next
+			 * thing typed lands where nobody can see it.
+			 *
+			 * `reloadMessages`, not `loadHistory`: the latter pages through
+			 * `get_messages_page`, which the server refuses outright while the
+			 * session is streaming or compacting (`session_busy`) — precisely the
+			 * case this exists to cover. `get_messages` carries no such guard.
+			 */
+			await bridge.reloadMessages().catch(reportBootFailure);
+		}
 		// Last, and only now: `switch_session` aborts the session, which takes any
 		// `bash` already in flight with it. The panels watch this rather than
 		// `status`, so their first git command is not the one that gets killed.

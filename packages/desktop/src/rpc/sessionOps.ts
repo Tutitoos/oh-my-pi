@@ -27,7 +27,11 @@ export async function oneshot<T>(cwd: string, sessionPath: string, command: Reco
 	const line = await invoke<string>("agent_oneshot", {
 		cwd,
 		lines: [
-			JSON.stringify({ id: switchId, type: "switch_session", path: sessionPath }),
+			// `sessionPath`, not `path`. The server reads `command.sessionPath`
+			// (rpc-types.ts declares it); sending `path` made it `undefined`, so the
+			// throwaway never switched and every rename landed on the empty session
+			// it had just created for itself — reporting success either way.
+			JSON.stringify({ id: switchId, type: "switch_session", sessionPath }),
 			JSON.stringify({ ...command, id: runId }),
 		],
 		expectId: runId,

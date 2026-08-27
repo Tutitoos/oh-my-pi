@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import {
 	BLOCKING_UI_METHODS,
 	isAvailableCommandsUpdate,
@@ -334,5 +335,53 @@ describe("transcript model against captured streaming shapes", () => {
 			message: { role: "toolResult", content: [{ type: "text", text: "output" }] },
 		});
 		expect(model.entries).toHaveLength(0);
+	});
+});
+
+/**
+ * The other direction, which nothing was checking.
+ *
+ * Everything above pins the frames the server sends us. The commands *we* send
+ * had no guard at all, and that is the direction three of this package's four
+ * shape bugs went — `args` vs `arguments`, `items` vs `tasks`, and `path` vs
+ * `sessionPath`, which made every rename of a closed session land on an empty
+ * throwaway while reporting success.
+ *
+ * So this reads omp's own declaration rather than a copy of it. A fixture would
+ * drift with us; the source cannot.
+ */
+describe("commands we send match what the server declares", () => {
+	const TYPES = new URL("../../coding-agent/src/modes/rpc/rpc-types.ts", import.meta.url).pathname;
+
+	/** Field names declared for one member of the `RpcCommand` union. */
+	function declaredFields(command: string): string[] {
+		const source = readFileSync(TYPES, "utf8");
+		const line = source
+			.split("\n")
+			.find(entry => entry.includes(`type: "${command}"`) && entry.trimStart().startsWith("|"));
+		if (!line) throw new Error(`no RpcCommand member declares type "${command}"`);
+		return [...line.matchAll(/(\w+)\??:/g)].map(match => match[1]).filter(name => name !== "type");
+	}
+
+	test("switch_session takes sessionPath, not path", () => {
+		expect(declaredFields("switch_session")).toContain("sessionPath");
+		expect(declaredFields("switch_session")).not.toContain("path");
+	});
+
+	test("the commands sessionOps builds only use fields the server declares", () => {
+		// These are the frames `oneshot` writes by hand, outside the bridge's
+		// typed wrappers — the only place in the app that hand-encodes a command.
+		const sent = {
+			switch_session: ["sessionPath"],
+			set_session_name: ["name"],
+			export_html: ["outputPath"],
+		};
+
+		for (const [command, fields] of Object.entries(sent)) {
+			const declared = declaredFields(command);
+			for (const field of fields) {
+				expect({ command, field, declared }).toMatchObject({ declared: expect.arrayContaining([field]) });
+			}
+		}
 	});
 });

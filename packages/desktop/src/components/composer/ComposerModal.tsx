@@ -34,8 +34,20 @@ export function ComposerModal({ composer }: { composer: ComposerDraft }) {
 			event.preventDefault();
 			composer.setExpanded(false);
 		};
-		window.addEventListener("keydown", onKey);
-		return () => window.removeEventListener("keydown", onKey);
+		/*
+		 * `document`, not `window`, and that is the whole fix.
+		 *
+		 * `preventDefault` only suppresses listeners that run *after* it, and
+		 * listeners on one target fire in registration order. The turn's abort
+		 * handler (routes/session.tsx) binds on `window` the moment streaming
+		 * starts — always before an overlay can exist — so an overlay that also
+		 * binds on `window` runs second and the turn is already dead. `document` is
+		 * strictly earlier than `window` in the bubble path, which is why the
+		 * overlays that got this right (ModelPicker, ApprovalModeBadge,
+		 * CompactDialog) all bind there.
+		 */
+		document.addEventListener("keydown", onKey);
+		return () => document.removeEventListener("keydown", onKey);
 	}, [composer.setExpanded]);
 
 	const pickFiles = useCallback(async () => {

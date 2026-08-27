@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { fieldSelection, focusedField, insertText, isEditable, readClipboard, writeClipboard } from "./clipboard";
+import { editField, fieldSelection, focusedField, isEditable, readClipboard, writeClipboard } from "./clipboard";
 import type { MenuItem } from "./contextMenu";
 import { useContextMenu } from "./contextMenu";
 
@@ -42,6 +42,12 @@ export function textItems(): MenuItem[] {
 	const field = focusedField();
 	const selected = field ? fieldSelection(field) : "";
 	const editable = field !== null;
+	/*
+	 * The range is captured here, not read when the item runs. Opening the menu
+	 * and clicking a row can move the focus, and a refocused field does not come
+	 * back with its selection — which is the entire definition of Cut.
+	 */
+	const range = { start: field?.selectionStart ?? 0, end: field?.selectionEnd ?? 0 };
 
 	return [
 		{
@@ -52,7 +58,7 @@ export function textItems(): MenuItem[] {
 			disabled: !editable ? "Not a text field" : selected ? undefined : "Nothing selected",
 			run: async () => {
 				await writeClipboard(selected);
-				insertText("");
+				if (field) editField(field, range, "");
 			},
 		},
 		{
@@ -71,7 +77,7 @@ export function textItems(): MenuItem[] {
 			disabled: editable ? undefined : "Not a text field",
 			run: async () => {
 				const text = await readClipboard();
-				if (text) insertText(text);
+				if (field && text) editField(field, range, text);
 			},
 		},
 		{ kind: "separator", id: "sep" },
@@ -81,7 +87,10 @@ export function textItems(): MenuItem[] {
 			label: "Select all",
 			hint: "⌘A",
 			disabled: editable ? undefined : "Not a text field",
-			run: () => field?.select(),
+			run: () => {
+				field?.focus();
+				field?.select();
+			},
 		},
 	];
 }
