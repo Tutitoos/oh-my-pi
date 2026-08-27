@@ -49,7 +49,7 @@ export function useBridge(
 
 	const boot = useCallback(async () => {
 		if (!isTauri() && !injected) return; // browser preview: nothing to spawn
-		await bridge.start(cwd);
+		const handle = await bridge.start(cwd);
 		// Run these on a resumed process too, not just a fresh one. The *process*
 		// already answered them once, but this `RpcBridge` is a new object with an
 		// empty TranscriptModel, no session state and no command list — and it is
@@ -63,6 +63,20 @@ export function useBridge(
 		// switchSession pulls the history itself; a tab with no session file is
 		// a fresh one and has none.
 		if (sessionPath) await bridge.switchSession(sessionPath).catch(() => {});
+		/*
+		 * A re-attached process, on the other hand, has a conversation and no file
+		 * to replay it from — the tab never knew one. Without this it renders "Ask
+		 * the agent something to get started" over a live session, and the next
+		 * thing typed lands in a transcript nobody can see.
+		 *
+		 * A tab id is unique per chat now, so this should only happen when a
+		 * webview reload finds its sidecars still in the Rust pool. Belt and
+		 * braces: silence is the failure mode that hid this for hours.
+		 */ else if (handle?.resumed) await bridge.loadHistory().catch(() => {});
+		// Last, and only now: `switch_session` aborts the session, which takes any
+		// `bash` already in flight with it. The panels watch this rather than
+		// `status`, so their first git command is not the one that gets killed.
+		bridge.markBooted();
 	}, [bridge, injected, sessionPath, cwd]);
 
 	// Start only what someone is looking at. Sessions stay open forever, so

@@ -1,3 +1,4 @@
+import { Markdown } from "@oh-my-pi/collab-web/src/components/transcript/Markdown";
 import { useEffect, useState } from "react";
 import type { RpcBridge } from "../rpc/bridge";
 import type { ExtensionUiRequestFrame } from "../rpc/protocol";
@@ -20,6 +21,36 @@ export function ApprovalDialog({ request, bridge }: { request: ExtensionUiReques
 	// A fresh request must not inherit the previous one's draft.
 	useEffect(() => setDraft(""), [request.id]);
 
+	/*
+	 * Numbers pick, arrows walk. The rows print the same number, so the two never
+	 * disagree — and a list of repository paths is something you answer with one
+	 * key rather than by aiming at it.
+	 */
+	useEffect(() => {
+		if (request.method !== "select") return;
+		const options = request.options ?? [];
+		const onKey = (event: KeyboardEvent) => {
+			if (event.metaKey || event.ctrlKey || event.altKey) return;
+			if (event.key >= "1" && event.key <= "9") {
+				const option = options[Number(event.key) - 1];
+				if (!option) return;
+				event.preventDefault();
+				bridge.answerUi({ id: request.id, value: option });
+				return;
+			}
+			if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+			const rows = [...document.querySelectorAll<HTMLButtonElement>(".omp-option")];
+			if (rows.length === 0) return;
+			event.preventDefault();
+			const current = rows.indexOf(document.activeElement as HTMLButtonElement);
+			const step = event.key === "ArrowDown" ? 1 : -1;
+			// Wrapping: reaching the last item from the top is one press, not four.
+			rows[(current + step + rows.length) % rows.length]?.focus();
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [bridge, request.id, request.method, request.options]);
+
 	// The server resolves to a default when its own timeout fires, so Escape
 	// only needs to communicate intent, not race it.
 	useEffect(() => {
@@ -37,30 +68,65 @@ export function ApprovalDialog({ request, bridge }: { request: ExtensionUiReques
 
 	const title = request.title ?? defaultTitle(request.method);
 
+	/*
+	 * A plan review carries the plan. The server marks it with `planFilePath`,
+	 * which is also what says the message is markdown — an `ask` sends prose, and
+	 * running that through a markdown renderer would reinterpret its punctuation.
+	 */
+	const plan = request.planFilePath ? request.message : undefined;
+
 	return (
 		<div className="omp-backdrop" role="dialog" aria-modal="true" aria-label={title}>
-			<div className="omp-modal">
+			{/* A document needs a settled size; a list of choices only needs room. */}
+			<div
+				className={`omp-modal${plan ? " omp-modal--document" : request.method === "select" ? " omp-modal--wide" : ""}`}
+			>
 				<h2 className="omp-modal__title">{title}</h2>
-				{request.message ? <p className="omp-modal__message">{request.message}</p> : null}
+
+				{/*
+				 * The plan comes before the choices, because that is the order it is
+				 * read in: what you are approving, then what you can do about it.
+				 * `Markdown` emits its own `.tr-md`; this div is only the scroller.
+				 */}
+				{plan ? (
+					<div className="omp-modal__plan">
+						<Markdown text={plan} />
+					</div>
+				) : request.message ? (
+					<p className="omp-modal__message">{request.message}</p>
+				) : null}
 
 				{request.method === "select" ? (
-					<div className="omp-modal__options">
+					/*
+					 * Rows, not buttons. These were `data-component="button"`, which is
+					 * built for a short action: it centres its content and sets
+					 * `white-space: nowrap`, so a choice carrying a sentence of detail came
+					 * out centred and ran straight out of the dialog. A choice is a line of
+					 * reading — left aligned, and it wraps.
+					 */
+					<div className="omp-modal__options" role="listbox" aria-label={title}>
 						{(request.options ?? []).map((option, index) => (
 							<button
+								className="omp-option"
 								key={option}
 								type="button"
-								data-component="button"
-								data-size="normal"
-								data-variant="ghost"
+								role="option"
+								aria-selected={false}
+								// The first is reachable with Enter alone, the rest by their number
+								// or by arrowing. A blocking dialog that needs the mouse interrupts
+								// you twice.
+								autoFocus={index === 0}
 								onClick={() => bridge.answerUi({ id: request.id, value: option })}
 							>
-								{option}
-								{request.optionDetails?.[index]?.description ? (
-									<span className="omp-slash__desc">
-										{" — "}
-										{request.optionDetails[index].description}
-									</span>
-								) : null}
+								<span className="omp-option__key" aria-hidden="true">
+									{index < 9 ? index + 1 : "·"}
+								</span>
+								<span className="omp-option__text">
+									<span className="omp-option__label">{option}</span>
+									{request.optionDetails?.[index]?.description ? (
+										<span className="omp-option__desc">{request.optionDetails[index].description}</span>
+									) : null}
+								</span>
 							</button>
 						))}
 					</div>
@@ -81,6 +147,16 @@ export function ApprovalDialog({ request, bridge }: { request: ExtensionUiReques
 							}
 						}}
 					/>
+				) : null}
+
+				{/*
+				 * Says the shortcut out loud. The numbers on the rows are only useful
+				 * to someone who knows they are keys and not decoration.
+				 */}
+				{request.method === "select" && (request.options?.length ?? 0) > 0 ? (
+					<p className="omp-modal__hint">
+						{`1–${Math.min(9, request.options?.length ?? 0)} to pick · ↑↓ to move · esc to cancel`}
+					</p>
 				) : null}
 
 				<div className="omp-modal__actions">

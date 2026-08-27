@@ -3,16 +3,21 @@ import { useOutletContext } from "react-router";
 import type { OpenTab, ShellContext } from "../app";
 import { ApprovalDialog } from "../components/ApprovalDialog";
 import { ApprovalModeBadge } from "../components/ApprovalModeBadge";
+import { CompactDialog } from "../components/CompactDialog";
 import { Composer } from "../components/Composer";
 import { ComposerModal } from "../components/composer/ComposerModal";
 import { useComposerDraft } from "../components/composer/useComposerDraft";
 import { ModelPicker } from "../components/ModelPicker";
-import { RightPanel } from "../components/RightPanel";
+import { PlanModeBadge } from "../components/PlanModeBadge";
+import { PlanStrip } from "../components/PlanStrip";
+import { type PanelTab, RightPanel } from "../components/RightPanel";
 import { StatusBar } from "../components/StatusBar";
 import { Transcript } from "../components/Transcript";
+import { compactionLabel, compactTokens } from "../rpc/compaction";
 import { isTauri, onWindowDrop } from "../rpc/transport";
 import { useBridge } from "../rpc/useBridge";
 import { setTabActivity } from "../shell/activity";
+import { registerBridge } from "../shell/bridges";
 import { notifyApprovalPending, notifyTurnComplete } from "../shell/notifications";
 
 /**
@@ -24,18 +29,37 @@ import { notifyApprovalPending, notifyTurnComplete } from "../shell/notification
  * live at once, LRU-evicted — so "all tabs mounted" is not "all tabs resident".
  */
 export function SessionRoute() {
-	const { tabs, activeTabId, panelOpen } = useOutletContext<ShellContext>();
+	const { tabs, activeTabId, panelOpen, openPanel, adoptSession } = useOutletContext<ShellContext>();
 
 	return (
 		<>
 			{tabs.map(tab => (
-				<SessionView key={tab.tabId} tab={tab} visible={tab.tabId === activeTabId} panelOpen={panelOpen} />
+				<SessionView
+					key={tab.tabId}
+					tab={tab}
+					visible={tab.tabId === activeTabId}
+					panelOpen={panelOpen}
+					openPanel={openPanel}
+					adoptSession={adoptSession}
+				/>
 			))}
 		</>
 	);
 }
 
-function SessionView({ tab, visible, panelOpen }: { tab: OpenTab; visible: boolean; panelOpen: boolean }) {
+function SessionView({
+	tab,
+	visible,
+	panelOpen,
+	openPanel,
+	adoptSession,
+}: {
+	tab: OpenTab;
+	visible: boolean;
+	panelOpen: boolean;
+	openPanel(): void;
+	adoptSession: ShellContext["adoptSession"];
+}) {
 	// A session boots the first time it is looked at and stays running after
 	// that, so switching away does not tear it down mid-turn.
 	const started = useRef(false);
@@ -65,6 +89,8 @@ function SessionView({ tab, visible, panelOpen }: { tab: OpenTab; visible: boole
 	 */
 	const booting = snapshot.status === "starting" && snapshot.transcript.length === 0;
 	const [cost, setCost] = useState<number | undefined>(undefined);
+	const [confirmCompact, setConfirmCompact] = useState(false);
+	const [panelTab, setPanelTab] = useState<PanelTab>("changes");
 
 	// One draft per session, owned here so the inline row and the expanded modal
 	// edit the same text rather than each keeping a copy.
@@ -72,6 +98,24 @@ function SessionView({ tab, visible, panelOpen }: { tab: OpenTab; visible: boole
 	// One condition, read by both the row and the overlay, so they can never
 	// disagree about whether the expanded editor exists.
 	const modalOpen = visible && composer.expanded && !snapshot.pendingUi;
+
+	/*
+	 * Tell the shell which session this tab turned out to be.
+	 *
+	 * A chat started here is `new:N:/path` and has no identity anything else can
+	 * recognise: clicking its own row in the sidebar used to append a second tab
+	 * and a second sidecar on the same jsonl, and its status dot — looked up by
+	 * session id — never lit. The state frame carries both fields; this is the
+	 * first moment they exist.
+	 */
+	const reportedSessionId = snapshot.state?.sessionId;
+	useEffect(() => {
+		if (reportedSessionId) adoptSession(tab.tabId, reportedSessionId);
+	}, [adoptSession, tab.tabId, reportedSessionId]);
+
+	// Publish the bridge itself, so the sidebar's context menu can act on a live
+	// session through the process that already owns it.
+	useEffect(() => registerBridge(tab.tabId, bridge), [tab.tabId, bridge]);
 
 	// Publish what this session is doing: the sidebar is the only place it shows,
 	// and the close guard reads the same store.
@@ -189,8 +233,90 @@ function SessionView({ tab, visible, panelOpen }: { tab: OpenTab; visible: boole
 						<div className="omp-banner omp-banner--info">Resuming this session…</div>
 					) : null}
 
-					{snapshot.status === "error" && snapshot.error ? (
-						<div className="omp-banner omp-banner--error">{snapshot.error}</div>
+					{/*
+					 * Not gated on `status === "error"`. A failed `switch_session` or a
+					 * history that would not load record an error while the status is
+					 * already `ready` — `#settle` promotes on any correlated reply,
+					 * including a failure one. Gated, those messages were written to a
+					 * channel nothing read, and the tab went on showing the wrong
+					 * session in silence.
+					 */}
+					{/*
+					 * Inside this wrapper, never beside it: `.omp-main` is
+					 * `grid-template-rows: auto 1fr auto` and a fourth child would take
+					 * the flexible row from the transcript.
+					 *
+					 * A manual compaction pushes no frames while it runs, so there is
+					 * nothing to turn into a percentage. The honest signal is that it
+					 * is alive, what it is doing, and a way out.
+					 */}
+					{snapshot.compaction ? (
+						<div className="omp-banner omp-banner--info">
+							<span className="omp-working" aria-hidden="true">
+								<span />
+								<span />
+								<span />
+							</span>
+							<span>
+								{compactionLabel(snapshot.compaction)}
+								{snapshot.compaction.tokensBefore !== undefined
+									? ` · ${compactTokens(snapshot.compaction.tokensBefore)} now`
+									: ""}
+							</span>
+							{snapshot.compaction.note ? (
+								<span className="omp-banner__note">{snapshot.compaction.note}</span>
+							) : null}
+							{/*
+							 * Only the manual pass can be stopped, and only because it is
+							 * dispatched through `/compact`: the `compact` command would
+							 * hold the queue this abort has to travel through.
+							 */}
+							{snapshot.compaction.origin === "manual" ? (
+								<button
+									type="button"
+									data-component="button"
+									data-variant="ghost"
+									data-size="normal"
+									onClick={() => void bridge.cancelCompaction()}
+								>
+									Cancel
+								</button>
+							) : null}
+						</div>
+					) : null}
+
+					{/*
+					 * Amber, not red. The engine says this when a compaction method
+					 * reclaimed something but not enough and it is moving to the next
+					 * one — the terminal shows the same text as a warning.
+					 */}
+					{snapshot.warning ? (
+						<div className="omp-banner omp-banner--warn">
+							<span>{snapshot.warning}</span>
+							<button
+								type="button"
+								className="omp-banner__dismiss"
+								aria-label="Dismiss"
+								onClick={() => bridge.clearWarning()}
+							>
+								×
+							</button>
+						</div>
+					) : null}
+
+					{snapshot.error ? (
+						<div className="omp-banner omp-banner--error">
+							<span>{snapshot.error}</span>
+							{/* `#error` used to survive until the app restarted. */}
+							<button
+								type="button"
+								className="omp-banner__dismiss"
+								aria-label="Dismiss"
+								onClick={() => bridge.clearError()}
+							>
+								×
+							</button>
+						</div>
 					) : null}
 
 					{/*
@@ -235,21 +361,53 @@ function SessionView({ tab, visible, panelOpen }: { tab: OpenTab; visible: boole
 				)}
 
 				<div>
+					<PlanStrip
+						phases={snapshot.todoPhases}
+						onOpen={() => {
+							setPanelTab("todos");
+							openPanel();
+						}}
+					/>
 					<Composer bridge={bridge} composer={composer} modalOpen={modalOpen} disabled={booting} />
 					<div className="omp-statusbar__wrap">
-						<StatusBar snapshot={snapshot} bridge={bridge} cwd={tab.cwd} cost={cost}>
+						<StatusBar snapshot={snapshot} cwd={tab.cwd} cost={cost} onCompact={() => setConfirmCompact(true)}>
 							<ModelPicker bridge={bridge} state={snapshot.state} />
+							<PlanModeBadge bridge={bridge} state={snapshot.state} />
 							<ApprovalModeBadge />
 						</StatusBar>
 					</div>
 				</div>
 			</main>
 
+			{/*
+			 * `visible` for the same reason the expanded composer carries it: this
+			 * renders beside `<main>`, outside the `hidden` that keeps background
+			 * sessions off screen. Open the dialog, switch tabs, and without this
+			 * it would sit over whichever session you switched to.
+			 */}
+			{confirmCompact && visible ? (
+				<CompactDialog
+					tokens={snapshot.state?.contextUsage?.tokens}
+					contextWindow={snapshot.state?.contextUsage?.contextWindow}
+					streaming={streaming}
+					onCancel={() => setConfirmCompact(false)}
+					onConfirm={() => {
+						setConfirmCompact(false);
+						void bridge.startCompaction().catch(() => {
+							/* the bridge records it; the banner shows it */
+						});
+					}}
+				/>
+			) : null}
+
 			{visible && panelOpen ? (
 				<RightPanel
 					bridge={bridge}
-					ready={snapshot.status === "ready"}
-					todoPhases={snapshot.state?.todoPhases ?? []}
+					ready={snapshot.status === "ready" && snapshot.booted}
+					streaming={streaming}
+					todoPhases={snapshot.todoPhases}
+					tab={panelTab}
+					onTab={setPanelTab}
 					subagentCount={snapshot.subagents.length}
 				/>
 			) : null}

@@ -84,7 +84,7 @@ export function TitleBar({
 				<button
 					className="omp-titlebar__button"
 					type="button"
-					title="New session (⌘T)"
+					title="New session… (⌘T)"
 					aria-label="New session"
 					onClick={onNewSession}
 				>

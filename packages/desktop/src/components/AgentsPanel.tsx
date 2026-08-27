@@ -49,7 +49,7 @@ function AgentRow({ agent, expanded, onToggle }: { agent: SubagentSnapshot; expa
 	return (
 		<div className="omp-agent" data-status={agent.status}>
 			<button className="omp-agent__head" type="button" onClick={onToggle}>
-				<span className={`omp-status-dot omp-status-dot--${dotStatus(agent.status)}`} />
+				<span className={`omp-dot omp-dot--${dotStatus(agent.status)}`} aria-label={agent.status} />
 				<span className="omp-agent__name">{agent.agent}</span>
 				<span className="omp-agent__status">{agent.status}</span>
 			</button>
@@ -91,18 +91,22 @@ function AgentRow({ agent, expanded, onToggle }: { agent: SubagentSnapshot; expa
 	);
 }
 
-/** Reuse the sidebar's dot palette; the enums differ by two names. */
+/**
+ * Map onto the sidebar's four dot states.
+ *
+ * It used to emit `pending`/`complete`/`error`/`aborted` against a
+ * `.omp-status-dot` class the terminal restyle deleted, so every subagent row
+ * rendered an unstyled empty span — zero pixels, no indicator at all.
+ */
 function dotStatus(status: SubagentSnapshot["status"]): string {
 	switch (status) {
 		case "running":
-			return "pending";
+			return "working";
 		case "completed":
-			return "complete";
+			return "done";
 		case "failed":
-			return "error";
-		case "aborted":
-			return "aborted";
+			return "attention";
 		default:
-			return "unknown";
+			return "idle";
 	}
 }

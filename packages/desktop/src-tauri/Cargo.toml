@@ -27,6 +27,11 @@ tauri = { version = "2", features = [] }
 tauri-plugin-shell = "2"
 # Native folder picker for "add a project"; the webview cannot open one itself.
 tauri-plugin-dialog = "2"
+# Opening a file in the system editor and an OAuth URL in the browser. The JS
+# package was installed from the start; the Rust half never was, so every
+# `openPath`/`openUrl` rejected and three features silently did nothing.
+tauri-plugin-opener = "2"
+tauri-plugin-clipboard-manager = "2"
 serde = { version = "1.0.181", features = ["derive"] }  # >=1.0.181 for rename_all_fields
 serde_json = "1"
 # Tauri vendors tokio but does not re-export its macros; select!/interval need this.

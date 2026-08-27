@@ -391,6 +391,16 @@ async fn pump(app: AppHandle, sink: Sink, mut rx: Receiver<CommandEvent>) {
 // Spawning
 // ---------------------------------------------------------------------------
 
+/// The user's home directory, if the environment says where it is.
+///
+/// `$HOME` rather than a crate: this is the only place the app needs it, and a
+/// dependency for one environment variable is not a trade worth making.
+fn dirs_home() -> Option<std::path::PathBuf> {
+	std::env::var_os("HOME")
+		.map(std::path::PathBuf::from)
+		.filter(|path| path.is_dir())
+}
+
 /// Spawn a sidecar and start its pump. The returned sink starts `Buffering`;
 /// the caller promotes it with `adopt`.
 fn spawn_sidecar(
@@ -405,12 +415,18 @@ fn spawn_sidecar(
 		.args(SIDECAR_ARGS)
 		.set_raw_out(RAW_OUT);
 
-	// Without this every session inherits the app bundle's working directory,
-	// so a session opened for one project would run against another. A
-	// pre-warmed child has no project yet and stays wherever it started; it is
-	// only adopted for a tab whose directory matches.
-	if let Some(dir) = cwd {
-		command = command.current_dir(std::path::PathBuf::from(dir));
+	// Without this every session inherits the app's working directory, so a
+	// session opened for one project would run against another. A pre-warmed
+	// child has no project yet; it is only adopted for a tab whose directory
+	// matches.
+	//
+	// With no project at all, fall back to the user's home rather than whatever
+	// the app happens to be running from: under `cargo run` that is
+	// `packages/desktop/src-tauri`, so a brand-new session opened its file tree
+	// on Tauri's own build directory — `capabilities/`, `icons/`, `build.rs`.
+	let target = cwd.map(std::path::PathBuf::from).or_else(dirs_home);
+	if let Some(dir) = target {
+		command = command.current_dir(dir);
 	}
 
 	let (rx, child) = command.spawn().map_err(|e| e.to_string())?;
@@ -613,6 +629,109 @@ async fn omp_cli(app: AppHandle, args: Vec<String>) -> Result<String, String> {
 	Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
+/// Where omp keeps its sessions. Every path this process is asked to delete has
+/// to live under here.
+fn sessions_root() -> Option<std::path::PathBuf> {
+	dirs_home().map(|home| home.join(".omp").join("agent").join("sessions"))
+}
+
+/// Delete a session file.
+///
+/// The webview has no filesystem access and `omp sessions` only reads, so this
+/// is the one door — which is exactly why it is narrow. A delete command
+/// reachable from a webview that accepts any path is a hole, not a feature, so
+/// the path is canonicalised and required to sit under omp's own sessions
+/// directory and to end in `.jsonl`. Symlinks are resolved before the check,
+/// not after.
+///
+/// Stopping a live sidecar for this session is the caller's job: only the
+/// webview knows which tab holds which session.
+#[tauri::command]
+fn delete_session(path: String) -> Result<(), String> {
+	let root = sessions_root().ok_or("no home directory")?;
+	let root = root.canonicalize().map_err(|e| format!("sessions directory unreadable: {e}"))?;
+	let target = std::path::PathBuf::from(&path)
+		.canonicalize()
+		.map_err(|e| format!("no such session: {e}"))?;
+
+	if !target.starts_with(&root) {
+		return Err("refusing to delete outside omp's sessions directory".into());
+	}
+	if target.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+		return Err("refusing to delete a file that is not a session".into());
+	}
+
+	std::fs::remove_file(&target).map_err(|e| e.to_string())
+}
+
+/// Run one RPC command against a session nobody has open, then go away.
+///
+/// Deliberately NOT in the pool. The pool is three live sidecars with LRU
+/// eviction, so borrowing a slot to rename a session could evict one that is
+/// mid-turn and cost it the turn — a context menu must not be able to do that.
+/// A child that was never registered evicts nothing.
+///
+/// The caller sends already-encoded NDJSON lines and names the response it is
+/// waiting for; this understands no more of the protocol than the relay does.
+#[tauri::command]
+async fn agent_oneshot(
+	app: AppHandle,
+	cwd: Option<String>,
+	lines: Vec<String>,
+	expect_id: String,
+	timeout_ms: u64,
+) -> Result<String, String> {
+	let mut command = app
+		.shell()
+		.sidecar(SIDECAR_NAME)
+		.map_err(|e| e.to_string())?
+		.args(SIDECAR_ARGS);
+
+	if let Some(dir) = cwd.map(std::path::PathBuf::from).or_else(dirs_home) {
+		command = command.current_dir(dir);
+	}
+
+	let (mut rx, mut child) = command.spawn().map_err(|e| e.to_string())?;
+
+	for line in &lines {
+		if let Err(err) = child.write(format!("{line}\n").as_bytes()) {
+			let _ = child.kill();
+			return Err(err.to_string());
+		}
+	}
+
+	let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+	let mut pending = String::new();
+	let mut answer: Option<String> = None;
+
+	while Instant::now() < deadline {
+		let left = deadline.saturating_duration_since(Instant::now());
+		let Ok(Some(event)) = tokio::time::timeout(left, rx.recv()).await else { break };
+		let chunk = match event {
+			CommandEvent::Stdout(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+			CommandEvent::Terminated(_) => break,
+			_ => continue,
+		};
+		pending.push_str(&chunk);
+		while let Some(cut) = pending.find('\n') {
+			let line: String = pending.drain(..=cut).collect();
+			let line = line.trim().to_string();
+			// Match on the correlation id, like every other client of this
+			// protocol: responses are not guaranteed to arrive in order.
+			if !line.is_empty() && line.contains(&format!("\"id\":\"{expect_id}\"")) {
+				answer = Some(line);
+				break;
+			}
+		}
+		if answer.is_some() {
+			break;
+		}
+	}
+
+	let _ = child.kill();
+	answer.ok_or_else(|| "the session did not answer in time".to_string())
+}
+
 /// An image the user dropped on the window, read for them.
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -740,6 +859,8 @@ pub fn run() {
 		// state — and it compiles perfectly.
 		.plugin(tauri_plugin_shell::init())
 		.plugin(tauri_plugin_dialog::init())
+		.plugin(tauri_plugin_opener::init())
+		.plugin(tauri_plugin_clipboard_manager::init())
 		.manage(Sessions::default())
 		.invoke_handler(tauri::generate_handler![
 			agent_start,
@@ -748,6 +869,8 @@ pub fn run() {
 			agent_kill,
 			agent_pool_status,
 			omp_cli,
+			agent_oneshot,
+			delete_session,
 			read_dropped_image
 		])
 		.setup(|app| {

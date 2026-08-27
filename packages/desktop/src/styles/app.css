@@ -353,7 +353,18 @@ body {
 	margin-left: auto;
 }
 
-.omp-statusbar button {
+/*
+ * Direct children only. As `.omp-statusbar button` this reset reached into the
+ * popups anchored here and stripped them: measured, every row in the model list
+ * and every thinking-level chip had `padding: 0` and no border, and the accent
+ * bar on the approval menu's current row computed to 0px — it out-specifies a
+ * single class, so any popup rule written with one silently lost.
+ *
+ * The bar has exactly one button of its own, `compact`. The picker triggers sit
+ * inside `.omp-picker` and carry their own complete styling, so nothing else
+ * needs this.
+ */
+.omp-statusbar > button {
 	border: 0;
 	background: transparent;
 	color: inherit;
@@ -362,7 +373,7 @@ body {
 	padding: 0;
 }
 
-.omp-statusbar button:hover {
+.omp-statusbar > button:hover {
 	color: var(--text-base);
 }
 
@@ -411,47 +422,83 @@ body {
 	color: var(--text-base);
 }
 
+/*
+ * A tint of the app's own ground, which is opencode's recipe
+ * (`dialog.css`: `hsl(from var(--background-base) h s l / 0.2)`), not the pure
+ * black this used to be.
+ *
+ * Heavier than their 0.2 on purpose: they separate the panel with
+ * `--shadow-lg-border-base` and we have no shadow to separate it with — the
+ * flattener drops every one. The scrim is doing that job alone here.
+ */
 .omp-backdrop {
 	position: fixed;
 	inset: 0;
 	display: grid;
 	place-items: center;
-	padding: 24px;
-	background: rgb(0 0 0 / 45%);
+	padding: 16px;
+	background: hsl(from var(--background-base) h s l / 0.62);
 	z-index: 40;
 }
 
+/*
+ * The measurements come from opencode's own `dialog.css`, vendored under
+ * `src/styles/vendor/opencode/components/` and deliberately not imported: its
+ * radius and shadow are killed by the flattener and its buttons want the
+ * three-attribute contract this app dropped. It is a specification here, not a
+ * dependency.
+ *
+ * `min(100vw - 16px, 640px)` and the 16/20px padding rhythm are theirs
+ * verbatim. A column layout with a scrolling body is what lets a dialog carry a
+ * document — a plan — without pushing its own buttons off screen.
+ */
 .omp-modal {
-	width: min(520px, 100%);
-	padding: 18px;
+	display: flex;
+	flex-direction: column;
+	width: min(640px, calc(100vw - 16px));
+	max-height: calc(100vh - 16px);
+	padding: 0;
 	border: 1px solid var(--border-base);
-	border-radius: 12px;
-	background: var(--background-strong);
+	background: var(--surface-raised-stronger-non-alpha);
 	color: var(--text-strong);
 }
 
 .omp-modal__title {
-	margin: 0 0 6px;
+	flex: 0 0 auto;
+	margin: 0;
+	padding: 16px 20px 8px;
 	font-size: var(--font-size-large);
 }
 
 .omp-modal__message {
-	margin: 0 0 14px;
+	flex: 0 0 auto;
+	margin: 0;
+	padding: 0 20px 16px;
 	color: var(--text-base);
 	white-space: pre-wrap;
 }
 
 .omp-modal__actions {
+	flex: 0 0 auto;
 	display: flex;
 	justify-content: flex-end;
 	gap: 8px;
+	padding: 12px 16px 16px;
 }
 
+/*
+ * The one part that scrolls. `min-height: 0` is what makes that true inside a
+ * flex column: without it the track refuses to shrink below its content and the
+ * overflow lands on the page instead.
+ */
 .omp-modal__options {
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow-y: auto;
 	display: flex;
 	flex-direction: column;
-	gap: 6px;
-	margin-bottom: 14px;
+	gap: 0;
+	padding: 0 8px;
 }
 
 /* -- slash menu ----------------------------------------------------------- */
@@ -475,8 +522,10 @@ body {
 	align-items: baseline;
 	gap: 10px;
 	width: 100%;
-	padding: 7px 12px;
+	padding: 7px 12px 7px 10px;
 	border: 0;
+	/* Reserved on every row so marking one does not shift its text sideways. */
+	border-left: var(--omp-bar) solid transparent;
 	background: transparent;
 	color: var(--text-base);
 	font: inherit;
@@ -489,9 +538,20 @@ body {
 	min-width: 0;
 }
 
+/*
+ * Marked the way the approval menu marks its current row, and for the same
+ * reason twice over: the old fill was `--background-weak`, which is now exactly
+ * the ground these menus sit on, so the active model was invisible — and a fill
+ * alone reads as a selection artefact rather than a state.
+ */
 .omp-slash__item[data-active="true"] {
-	background: var(--background-weak);
+	border-left-color: var(--text-interactive-base);
+	background: color-mix(in srgb, var(--text-interactive-base) 10%, transparent);
 	color: var(--text-strong);
+}
+
+.omp-slash__item[data-active="true"] .omp-slash__name {
+	color: var(--text-interactive-base);
 }
 
 .omp-slash__name {
@@ -693,15 +753,6 @@ body {
 .omp-diff__status--modified,
 .omp-diff__status--renamed {
 	color: var(--icon-warning-base);
-}
-
-.omp-diff__path {
-	flex: 1;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-	direction: rtl;
-	text-align: left;
 }
 
 .omp-diff__body {
@@ -1162,8 +1213,13 @@ body {
 	z-index: 30;
 }
 
+/*
+ * Wide enough for the longest description on one line. At 260px "Prompts before
+ * running commands" ran into the right edge; the menu is a popup, so it can be
+ * as wide as its content needs rather than making the text fit the box.
+ */
 .omp-picker__menu--narrow {
-	width: 260px;
+	width: 300px;
 }
 
 .omp-picker__section {
@@ -1276,11 +1332,12 @@ body {
  * Nothing is rounded and nothing floats. Blunt on purpose: it flattens the
  * vendored rules without editing them.
  *
- * The status dots are the deliberate exception — a square dot is not a dot, and
- * the TUI draws them round too.
+ * Three deliberate exceptions, all because a square version of them is not the
+ * same object: a dot, a tool frame whose corners are `╭╮╰╯`, and the ring the
+ * tool renderer spins while a call is in flight.
  */
-.omp-shell *:not(.omp-dot),
-.omp-backdrop *:not(.omp-dot) {
+.omp-shell *:not(.omp-dot, .tv-card, .tv-spin),
+.omp-backdrop *:not(.omp-dot, .tv-card, .tv-spin) {
 	border-radius: var(--omp-radius) !important;
 	box-shadow: none !important;
 }
@@ -1506,9 +1563,14 @@ body {
 
 /* -- sidebar -------------------------------------------------------------- */
 
+/*
+ * The side columns sit one surface above the chat's ground. They used to share
+ * it, which was invisible while the palette had `base` and `strong` set to the
+ * same value — four levels collapsed into one flat black.
+ */
 .omp-sidebar {
 	border-right: 1px solid var(--border-base);
-	background: var(--background-base);
+	background: var(--background-strong);
 }
 
 /*
@@ -1535,7 +1597,7 @@ body {
 
 .omp-panel {
 	border-left: 1px solid var(--border-base);
-	background: var(--background-base);
+	background: var(--background-strong);
 }
 
 /*
@@ -1568,13 +1630,31 @@ body {
 
 /* -- menus and dialogs ---------------------------------------------------- */
 
+/*
+ * A menu is not a focused control. `--border-focus` was a neutral grey when this
+ * was written; inside the transcript column it now resolves to the theme's
+ * accent, which outlined every popup in bright cyan.
+ *
+ * The ground moved too, and for a measured reason: on `--background-stronger`
+ * (#2a3038 in the column) the muted text these menus use sits at 2.75:1. The
+ * tool frames' recipe — card ground, neutral hairline — puts every role above
+ * 7:1 and makes a popup read as the same kind of object as a tool card.
+ */
 .omp-slash,
-.omp-picker__menu,
-.omp-modal {
-	border: 1px solid var(--border-focus);
-	background: var(--background-stronger);
+.omp-picker__menu {
+	border: 1px solid var(--border-base);
+	background: var(--background-weak);
 }
 
+/*
+ * `.omp-modal` used to be in that group, and it should never have been. The
+ * ground moved for a reason that only holds inside the transcript column —
+ * there `--background-stronger` is #2a3038 and muted text sits at 2.75:1 — but
+ * every modal renders *outside* the column, where the reason does not apply.
+ * The rule dragged them onto `--background-weak`, which in opencode's system is
+ * the hover surface, so a dialog read as a lit slab. Its ground now comes from
+ * the base rule, which uses what opencode puts a dialog on.
+ */
 .omp-modal__title {
 	font-size: var(--font-size-base);
 	font-weight: 700;
@@ -1597,42 +1677,77 @@ body {
 /* -- tool calls ----------------------------------------------------------- */
 
 /*
- * The TUI writes a tool call as one dense line — ▪ name · model · duration —
- * not as a framed card. The renderers already emit the right structure
- * (`.tv-head` with status, name, summary and chevron), so this only strips the
- * frame and rebalances the weights: the name is what you scan for, the summary
- * is context.
+ * A framed tool is a box, and this used to claim otherwise.
+ *
+ * Every framed tool in the CLI goes through `renderOutputBlock`
+ * (coding-agent/src/tui/output-block.ts): a `╭─ label ─╮` frame whose colour
+ * carries the state, and a background fill on every row inside it. The earlier
+ * rule here stripped both, on the mistaken belief that the TUI wrote a tool
+ * call as one dense line. `tool-render.css` already emits exactly the right
+ * frame, so the fix is mostly deleting what was overriding it.
+ *
+ * Not every tool is framed: bash and eval draw a rule above and below instead,
+ * and generic renderers get no frame at all. That distinction lives in the
+ * renderers, not here.
  */
 .omp-entry--tool {
 	max-width: none;
-	padding: 0;
+	padding: 0 16px;
 }
 
+/*
+ * `!important` throughout this block, and not for emphasis: `tool-render.css`
+ * arrives unlayered (see index.css), so an `app`-layer rule loses to it on
+ * every property it declares — which is every property below. Measured: the
+ * frame kept its own border colour and the name stayed grey with all the
+ * tokens resolving correctly.
+ */
 .tv-card {
-	border: 0 !important;
-	background: transparent !important;
+	background: var(--tui-tool-success-bg) !important;
+	border-color: var(--tui-border-muted) !important;
+	border-radius: 4px !important;
+	font-size: var(--font-size-small) !important;
+}
+
+/*
+ * The frame's colour is the state, read off the marks the renderer already
+ * leaves: a spinner while it runs, an error class when it failed. Matches the
+ * `state` switch in output-block.ts.
+ */
+.tv-card:has(.tv-spin) {
+	border-color: var(--tui-accent) !important;
+	background: var(--tui-tool-pending-bg) !important;
+}
+
+.tv-card--error {
+	border-color: var(--tui-error) !important;
+	background: var(--tui-tool-error-bg) !important;
 }
 
 .tv-head {
-	padding: 3px 24px;
-	gap: 10px;
+	padding: 4px 8px !important;
+	gap: 8px !important;
 }
 
 .tv-head:hover {
-	background: var(--background-weak);
+	background: color-mix(in srgb, var(--tui-text) 5%, transparent) !important;
 }
 
-/* Bright and bold: this is the word you look for when scanning a transcript. */
+/*
+ * Accent, not bold. `renderStatusLine` — the path the framed headers take —
+ * colours the title and leaves the weight alone; the bold version comes from
+ * `formatTitle`, which the frames do not use.
+ */
 .tv-name {
-	font-size: var(--font-size-small);
-	font-weight: 700;
-	letter-spacing: 0;
-	color: var(--text-strong);
+	font-size: var(--font-size-small) !important;
+	font-weight: 400 !important;
+	letter-spacing: 0 !important;
+	color: var(--tui-accent) !important;
 }
 
 .tv-sum {
-	font-size: var(--font-size-small);
-	color: var(--text-weak);
+	font-size: var(--font-size-small) !important;
+	color: var(--tui-muted) !important;
 }
 
 /* A square, like the TUI's block glyph — the round dots belong to the sidebar. */
@@ -1643,14 +1758,14 @@ body {
 }
 
 .tv-body {
-	padding: 6px 24px 10px;
-	border-top: 0;
+	padding: 2px 8px 8px !important;
+	border-top: 0 !important;
 }
 
 .tv-partial {
-	margin: 0;
-	padding: 4px 24px;
-	color: var(--text-weak);
+	margin: 0 !important;
+	padding: 4px 8px !important;
+	color: var(--tui-muted) !important;
 }
 
 /* -- status line, continued ----------------------------------------------- */
@@ -1765,9 +1880,21 @@ body {
 /* Right-aligned and dim: present when you look for it, silent when you do not. */
 .omp-session__age {
 	flex: 0 0 auto;
-	color: var(--text-weaker);
+	/* The dimmest token measured 2.51:1 here — not legible at 11px. */
+	color: var(--text-weak);
 	font-variant-numeric: tabular-nums;
 	font-size: 11px;
+}
+
+/*
+ * A chat you started this run that omp has not written a session for yet.
+ *
+ * Deliberately understated: it is a real row you can click, not a warning. The
+ * accent on its marker is the only difference, and it disappears on its own the
+ * moment the session gets a row of its own.
+ */
+.omp-session--unsaved .omp-session__age {
+	color: var(--text-interactive-base);
 }
 
 /*
@@ -1779,7 +1906,8 @@ body {
 	align-items: center;
 	gap: 6px;
 	padding: 3px 6px 3px 10px;
-	color: var(--text-weaker);
+	/* Same reason as the session age: the dimmest token is not for 11px text. */
+	color: var(--text-weak);
 	font-size: 11px;
 	line-height: 1.3;
 }
@@ -1856,6 +1984,314 @@ body {
 	color: var(--text-weaker);
 }
 
+
+/* -- changed-file rows ---------------------------------------------------- */
+
+/*
+ * The counts never shrink and never wrap.
+ *
+ * The vendored badge this replaces was sized by the flex algorithm and laid out
+ * `flex-end`, so whenever its box came out narrower than its own text the digits
+ * overflowed the *left* edge and printed on top of the path. Measured: an 18px
+ * box holding 38px of content.
+ */
+.omp-diff__counts {
+	display: flex;
+	flex: 0 0 auto;
+	gap: 5px;
+	font-variant-numeric: tabular-nums;
+	font-size: 11px;
+	line-height: 1.35;
+}
+
+.omp-diff__count--add {
+	color: var(--text-diff-add-base);
+}
+
+.omp-diff__count--del {
+	color: var(--text-diff-delete-base);
+}
+
+/*
+ * The name is what you scan for, so it is the part that never gives way. The
+ * directory is context: dimmed, and truncated from the left, because the tail of
+ * a path carries the meaning and the head is the same on every row.
+ */
+.omp-diff__name {
+	flex: 0 0 auto;
+	color: var(--text-strong);
+	white-space: nowrap;
+}
+
+.omp-diff__dir {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+	/* The dimmest token measured 2.51:1 here — not legible at 11px. */
+	color: var(--text-weak);
+	font-size: 11px;
+}
+
+.omp-diff__file[aria-current="true"] .omp-diff__dir {
+	color: var(--text-weak);
+}
+
+/* -- right panel: layout and emptiness ------------------------------------ */
+
+/*
+ * An empty panel used to centre its message vertically, which in a column 800px
+ * tall left "No uncommitted changes." floating in the middle of nothing. Read
+ * near the top it looks like a state; read in the middle it looks like a fault.
+ */
+.omp-panel__body .omp-empty {
+	display: block;
+	height: auto;
+	padding: 20px 14px;
+	color: var(--text-weaker);
+	text-align: left;
+}
+
+/*
+ * The file list was capped at 40% whether or not a diff was open, so with
+ * nothing selected the other 60% of the panel was dead space. The cap only
+ * earns its place once a diff is sharing the column.
+ */
+.omp-diff__files {
+	max-height: none;
+}
+
+.omp-diff:has(.omp-diff__body) .omp-diff__files {
+	max-height: 40%;
+}
+
+/* The count is context for the tab, not part of its name. */
+.omp-panel__count {
+	margin-left: 5px;
+	/* The dimmest token measured 2.51:1 here — not legible at 11px. */
+	color: var(--text-weak);
+	font-variant-numeric: tabular-nums;
+	font-size: 11px;
+}
+
+.omp-panel__tab[aria-selected="true"] .omp-panel__count {
+	color: var(--text-weak);
+}
+
+/*
+ * The head is a label plus an action, so it reads as a strip rather than as two
+ * competing controls: the count is quiet, the button is the only thing lit.
+ */
+.omp-diff__head {
+	padding: 8px 12px;
+	border-bottom: 1px solid var(--border-base);
+	color: var(--text-weak);
+	font-size: var(--font-size-small);
+}
+
+.omp-diff__head [data-component="button"] {
+	padding: 2px 8px;
+	min-height: 0;
+	background: transparent;
+	color: var(--text-interactive-base);
+}
+
+.omp-diff__file {
+	padding: 3px 12px;
+	line-height: 1.35;
+}
+
+/* -- rendered markdown ---------------------------------------------------- */
+
+/*
+ * The model writes markdown and the transcript used to print it raw — asterisks
+ * around every bold word, backticks around every path, list dashes flush left.
+ *
+ * collab-web's renderer emits the HTML; these are this app's styles for it,
+ * because its stylesheet is not imported here. Written in the flat idiom: the
+ * whole app is monospace already, so headings separate by weight and space
+ * rather than by size, and nothing gains a corner the rest of the app does not
+ * have.
+ */
+.tr-md > :first-child {
+	margin-top: 0;
+}
+
+.tr-md > :last-child {
+	margin-bottom: 0;
+}
+
+.tr-md p,
+.tr-md ul,
+.tr-md ol,
+.tr-md blockquote,
+.tr-md pre,
+.tr-md table {
+	margin: 0 0 10px;
+}
+
+.tr-md h1,
+.tr-md h2,
+.tr-md h3,
+.tr-md h4,
+.tr-md h5,
+.tr-md h6 {
+	margin: 16px 0 6px;
+	color: var(--text-strong);
+	font-size: var(--font-size-base);
+	font-weight: 700;
+	letter-spacing: 0.02em;
+}
+
+/*
+ * Markers restored. The vendored reset sets `list-style: none` globally, which
+ * is right for the app's own menus and wrong here — a rendered markdown list
+ * with no bullets is just indented prose.
+ */
+.tr-md ul {
+	padding-left: 20px;
+	list-style: disc outside;
+}
+
+.tr-md ol {
+	padding-left: 20px;
+	list-style: decimal outside;
+}
+
+.tr-md ul ul {
+	list-style: circle outside;
+}
+
+.tr-md li::marker {
+	color: var(--text-weak);
+}
+
+.tr-md li {
+	margin: 2px 0;
+}
+
+/* A nested list is a continuation, not a new block. */
+.tr-md li > ul,
+.tr-md li > ol {
+	margin: 2px 0;
+}
+
+.tr-md li > p {
+	margin: 0;
+}
+
+.tr-md a {
+	color: var(--text-interactive-base);
+	text-decoration: none;
+}
+
+.tr-md a:hover {
+	text-decoration: underline;
+}
+
+/*
+ * Inline code is already the same family as its surroundings, so it is marked
+ * by ground rather than by font — which is what the terminal does too.
+ */
+.tr-md code {
+	padding: 1px 4px;
+	background: var(--background-weak);
+	color: var(--text-strong);
+}
+
+.tr-md pre {
+	padding: 8px 12px;
+	background: var(--background-weak);
+	overflow-x: auto;
+	scrollbar-gutter: stable;
+}
+
+.tr-md pre code {
+	padding: 0;
+	background: transparent;
+}
+
+/* macOS hides overlay scrollbars, so a wide block reads as truncated. */
+.tr-md pre::-webkit-scrollbar {
+	height: 8px;
+}
+
+.tr-md pre::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+.tr-md pre::-webkit-scrollbar-thumb {
+	background: var(--text-weaker);
+}
+
+/* The same left bar the composer and your own turn carry. */
+.tr-md blockquote {
+	margin-left: 0;
+	padding: 2px 0 2px 12px;
+	border-left: var(--omp-bar) solid var(--border-base);
+	color: var(--text-weak);
+}
+
+.tr-md hr {
+	margin: 14px 0;
+	border: 0;
+	border-top: 1px solid var(--border-base);
+}
+
+.tr-md table {
+	border-collapse: collapse;
+	display: block;
+	overflow-x: auto;
+	max-width: 100%;
+}
+
+.tr-md th,
+.tr-md td {
+	padding: 3px 10px 3px 0;
+	border-bottom: 1px solid var(--border-base);
+	text-align: left;
+	vertical-align: top;
+}
+
+.tr-md th {
+	color: var(--text-weak);
+	font-weight: 700;
+}
+
+.tr-md img {
+	max-width: 100%;
+}
+
+/* -- tool cards: reachable content ---------------------------------------- */
+
+/*
+ * `.tv-pre`, `.tv-diff` and `.tv-partial` already scroll — the shared stylesheet
+ * gives them `overflow: auto` — but it defines no scrollbar at all, and macOS
+ * fades its overlay bars to nothing. So a wide `read` or a long line looked
+ * truncated when it was merely off to one side.
+ *
+ * Scoped to this app's layer, which comes after `tool-render`, so the shared
+ * package is untouched.
+ */
+.tv-pre::-webkit-scrollbar,
+.tv-diff::-webkit-scrollbar,
+.tv-partial::-webkit-scrollbar {
+	width: 8px;
+	height: 8px;
+}
+
+.tv-pre::-webkit-scrollbar-track,
+.tv-diff::-webkit-scrollbar-track,
+.tv-partial::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+.tv-pre::-webkit-scrollbar-thumb,
+.tv-diff::-webkit-scrollbar-thumb,
+.tv-partial::-webkit-scrollbar-thumb {
+	background: var(--text-weaker);
+}
 
 /* -- resize handles ------------------------------------------------------ */
 
@@ -2148,7 +2584,8 @@ body {
 	height: 38px;
 	padding: 0 8px 0 78px;
 	border-bottom: 1px solid var(--border-base);
-	background: var(--background-base);
+	/* Chrome, like the columns it spans — not the chat's ground. */
+	background: var(--background-strong);
 	user-select: none;
 }
 
@@ -2233,4 +2670,851 @@ body {
 .omp-icon {
 	display: block;
 	flex: 0 0 auto;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ *
+ *  THE COLUMN SPEAKS THE CLI'S PALETTE
+ *
+ *  Colours resolved from omp's own `titanium` theme and scoped to `.omp-main`
+ *  by tui-theme.css, which is generated — see scripts/gen-theme-css.ts. Rules
+ *  below reach for `--tui-*` only where the theme draws a distinction this
+ *  app's token set does not: markdown headings against links against code, a
+ *  tool frame's fill against the page.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/*
+ * The column carries its own ground. The sidebar and side panel stay on
+ * opencode's near-black, so the two edges get a hairline: without it the change
+ * of colour reads as a rendering fault rather than a boundary.
+ */
+.omp-main {
+	background: var(--tui-page-bg);
+	/*
+	 * Restated, not inherited. `body` resolves `color: var(--text-strong)` where
+	 * the token still holds opencode's value; redefining the token further down
+	 * the tree does not re-resolve a declaration made above it. Measured: the
+	 * column kept painting rgba(255,255,255,.937) with every token correct.
+	 */
+	color: var(--text-strong);
+	border-left: 1px solid var(--border-base);
+	border-right: 1px solid var(--border-base);
+	line-height: 1.45;
+}
+
+/* Nothing to the left of the column, so no edge to state. */
+.omp-shell[data-sidebar="false"] .omp-main {
+	border-left: 0;
+}
+
+.omp-shell[data-panel="false"] .omp-main {
+	border-right: 0;
+}
+
+/* -- the turns ------------------------------------------------------------ */
+
+/*
+ * Your turn: a filled block, the way the TUI paints `userMessageBg` across the
+ * full width with a blank row above and below. The accent bar is this app's
+ * own addition — the CLI has no such thing — kept because it survives a fast
+ * scroll in a way a fill of similar weight does not.
+ */
+.omp-entry--user .omp-entry__body {
+	padding: 12px 24px;
+	border-left: var(--omp-bar) solid var(--tui-accent);
+	background: var(--tui-user-message-bg);
+	color: var(--tui-user-message-text);
+}
+
+.omp-entry--assistant .omp-entry__body {
+	color: var(--tui-text);
+}
+
+/* Italic and muted, as `assistant-message.ts` renders a reasoning block. */
+.omp-entry--thinking .omp-entry__body {
+	color: var(--tui-thinking-text);
+	font-style: italic;
+}
+
+/*
+ * The CLI labels no turn at all — not yours, not the assistant's, not a
+ * reasoning block. `user` and `assistant` were already hidden; this one was
+ * left behind and printed a bare "thinking" above every reasoning block.
+ */
+.omp-entry--thinking .omp-entry__role {
+	display: none;
+}
+
+/*
+ * The renderer emits real block elements, so the `pre-wrap` this inherits from
+ * `.omp-entry__body` turns every newline between two of them into rendered
+ * whitespace. Measured before this: a blank line's worth of gap between each
+ * paragraph, list and code block.
+ */
+.tr-md {
+	white-space: normal;
+}
+
+/* Except where it is the point. */
+.tr-md pre,
+.tr-md code {
+	white-space: pre;
+}
+
+.tr-md pre code {
+	white-space: inherit;
+}
+
+/* -- rendered markdown, in the theme's colours ---------------------------- */
+
+/*
+ * The theme names these separately and the TUI paints them separately, so the
+ * flat treatment written against `--text-strong` loses information here: a
+ * heading, a link and a piece of code were all the same grey.
+ */
+.tr-md h1,
+.tr-md h2,
+.tr-md h3,
+.tr-md h4,
+.tr-md h5,
+.tr-md h6 {
+	color: var(--tui-md-heading);
+}
+
+.tr-md a {
+	color: var(--tui-md-link);
+}
+
+.tr-md li::marker {
+	color: var(--tui-md-list-bullet);
+}
+
+/* Green on the page's own ground, not grey on a lighter slab. */
+.tr-md code {
+	padding: 0;
+	background: transparent;
+	color: var(--tui-md-code);
+}
+
+.tr-md pre {
+	border: 1px solid var(--tui-md-code-block-border);
+	background: var(--tui-card-bg);
+	color: var(--tui-md-code-block);
+}
+
+.tr-md pre code {
+	color: inherit;
+}
+
+.tr-md blockquote {
+	border-left-color: var(--tui-md-quote-border);
+	color: var(--tui-md-quote);
+}
+
+.tr-md hr {
+	border-top-color: var(--tui-md-hr);
+}
+
+.tr-md th,
+.tr-md td {
+	border-bottom-color: var(--tui-border);
+}
+
+.tr-md th {
+	color: var(--tui-muted);
+}
+
+/* -- composer and status line --------------------------------------------- */
+
+.omp-composer__input,
+.omp-composer__stand-in {
+	border-left-color: var(--tui-accent);
+	background: var(--tui-card-bg);
+	color: var(--tui-text);
+}
+
+.omp-composer__input:focus {
+	border-color: var(--tui-accent);
+	background: var(--tui-card-bg);
+}
+
+.omp-composer__row [data-component="button"],
+.omp-composer__expand {
+	background: var(--tui-card-bg);
+}
+
+.omp-statusbar__wrap {
+	background: var(--tui-status-line-bg);
+}
+
+/* -- choice menus --------------------------------------------------------- */
+
+/*
+ * A row in a single-choice menu.
+ *
+ * It used to borrow `.omp-slash__item`, whose layout is built for the slash
+ * menu: name and description on one line, description ellipsised. In a 260px
+ * popup that wrapped "Auto-approves reads only" onto a ragged second line and
+ * gave the three rows three different heights. Stacking them costs one line
+ * each and makes the column edges line up.
+ *
+ * The active row is marked three ways — a bar, a tick and the accent — because
+ * the single dark fill it had before read as a selection artefact, not a state.
+ */
+.omp-choice {
+	display: flex;
+	gap: 8px;
+	width: 100%;
+	padding: 6px 10px 6px 8px;
+	border: 0;
+	border-left: var(--omp-bar) solid transparent;
+	background: transparent;
+	font: inherit;
+	text-align: left;
+	cursor: default;
+}
+
+.omp-choice:hover {
+	background: color-mix(in srgb, var(--text-strong) 6%, transparent);
+}
+
+.omp-choice:focus-visible {
+	outline: 1px solid var(--text-interactive-base);
+	outline-offset: -1px;
+}
+
+.omp-choice[aria-checked="true"] {
+	border-left-color: var(--text-interactive-base);
+	background: color-mix(in srgb, var(--text-interactive-base) 10%, transparent);
+}
+
+/* Reserved whether or not it holds a tick, so the labels never shift. */
+.omp-choice__mark {
+	flex: 0 0 auto;
+	width: 10px;
+	color: var(--text-interactive-base);
+	font-size: var(--font-size-small);
+	line-height: 1.5;
+}
+
+.omp-choice__text {
+	display: flex;
+	flex-direction: column;
+	gap: 1px;
+	min-width: 0;
+}
+
+/*
+ * A step larger than the description. The menu inherits the status bar's small
+ * size, so without this the two halves of the label were both 12px and the
+ * ranking rested on colour alone.
+ */
+.omp-choice__name {
+	color: var(--text-strong);
+	font-size: var(--font-size-base);
+	line-height: 1.5;
+}
+
+.omp-choice[aria-checked="true"] .omp-choice__name {
+	color: var(--text-interactive-base);
+}
+
+/*
+ * `--text-weak`, not `--text-weaker`. The weaker one measures 2.75:1 on the
+ * ground this menu sits on; this one clears 7:1.
+ */
+.omp-choice__desc {
+	color: var(--text-weak);
+	font-size: var(--font-size-small);
+	line-height: 1.4;
+}
+
+/* The note is an aside about consequences, so it gets a rule above it. */
+.omp-picker__note {
+	margin-top: 6px;
+	padding-top: 6px;
+	border-top: 1px solid var(--border-base);
+	color: var(--text-weak);
+}
+
+/* A bare word does not look like a control. */
+.omp-picker__trigger {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+}
+
+.omp-picker__caret {
+	width: 0;
+	height: 0;
+	border-left: 3px solid transparent;
+	border-right: 3px solid transparent;
+	border-top: 4px solid currentcolor;
+	opacity: 0.7;
+}
+
+.omp-picker__trigger[aria-expanded="true"] {
+	border-color: var(--border-base);
+	color: var(--text-strong);
+}
+
+/*
+ * The same measurement that moved the approval menu's descriptions applies to
+ * the slash menu and the model list, which sit on the same ground: `weaker`
+ * lands at 3.88:1 there, `weak` at 7.40. These are the secondary halves of a
+ * two-part label — dim enough to rank below the name, not dim enough to give up
+ * on reading.
+ */
+.omp-slash__desc,
+.omp-picker__empty {
+	color: var(--text-weak);
+}
+
+/* -- compaction ----------------------------------------------------------- */
+
+/*
+ * The boundary a compaction leaves behind. The TUI draws it as a rule with the
+ * method and the token delta sitting in the gap, and it earns the horizontal
+ * line the rest of this app avoids: it is not a separator between two messages,
+ * it is the edge of what the model still remembers.
+ */
+.omp-compaction {
+	padding: 10px 24px;
+}
+
+.omp-compaction__bar {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	color: var(--tui-muted);
+	font-size: var(--font-size-small);
+}
+
+/* The rule is drawn by the row, so a long summary underneath stays readable. */
+.omp-compaction__bar::before,
+.omp-compaction__bar::after {
+	content: "";
+	flex: 1;
+	height: 1px;
+	background: var(--tui-border);
+}
+
+.omp-compaction__amount {
+	color: var(--tui-accent);
+}
+
+.omp-compaction__warning {
+	color: var(--tui-warning);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	max-width: 40ch;
+}
+
+.omp-compaction__details {
+	margin-top: 6px;
+}
+
+.omp-compaction__details > summary {
+	color: var(--tui-dim);
+	font-size: var(--font-size-small);
+	cursor: default;
+	list-style: none;
+}
+
+.omp-compaction__details > summary::-webkit-details-marker {
+	display: none;
+}
+
+.omp-compaction__details > summary::before {
+	content: "▸ ";
+}
+
+.omp-compaction__details[open] > summary::before {
+	content: "▾ ";
+}
+
+.omp-compaction__summary {
+	margin-top: 4px;
+	padding: 8px 12px;
+	border-left: var(--omp-bar) solid var(--tui-border);
+	background: var(--tui-card-bg);
+	color: var(--tui-muted);
+	font-size: var(--font-size-small);
+	white-space: pre-wrap;
+}
+
+/* -- banners: narration and dismissal ------------------------------------- */
+
+/* The engine's own words about what it is trying, when it says anything. */
+.omp-banner__note {
+	color: var(--text-weak);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	min-width: 0;
+}
+
+/* Pushed to the end, so it does not sit between the message and its action. */
+.omp-banner__dismiss {
+	margin-left: auto;
+	padding: 0 6px;
+	border: 0;
+	background: transparent;
+	color: inherit;
+	font: inherit;
+	cursor: default;
+	opacity: 0.7;
+}
+
+.omp-banner__dismiss:hover {
+	opacity: 1;
+}
+
+/* The bar is the proof a compaction worked, so let the drop read as motion. */
+.omp-meter__fill {
+	transition: width 240ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.omp-meter__fill {
+		transition: none;
+	}
+}
+
+/* Amber: something the engine wants you to know, not something that failed. */
+.omp-banner--warn {
+	background: color-mix(in srgb, var(--icon-warning-base) 12%, transparent);
+	color: var(--icon-warning-base);
+}
+
+/* -- the plan ------------------------------------------------------------- */
+
+/*
+ * Status carries the meaning here, so each of the five gets its own colour and
+ * they are the terminal's: green done, accent running, amber blocked, red
+ * dropped, dim waiting. Before this the panel knew two of them, and blocked and
+ * abandoned both rendered as "pending".
+ *
+ * App tokens, not `--tui-*`: those are scoped to `.omp-main` and this panel
+ * lives outside it, so a `--tui-warning` here resolves to nothing and the
+ * declaration is simply dropped. Measured — every status came out the same
+ * white before this was fixed.
+ */
+
+.omp-todo__phase {
+	margin-bottom: 10px;
+}
+
+.omp-todo__title {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	margin: 0 0 4px;
+	color: var(--text-weak);
+	font-size: var(--font-size-small);
+	cursor: default;
+	list-style: none;
+}
+
+.omp-todo__title::-webkit-details-marker {
+	display: none;
+}
+
+.omp-todo__title::before {
+	content: "▸";
+	color: var(--text-weaker);
+}
+
+.omp-todo__phase details[open] > .omp-todo__title::before {
+	content: "▾";
+}
+
+/* The phase the agent is on, and the only one open by default. */
+.omp-todo__phase[data-active] .omp-todo__title {
+	color: var(--text-interactive-base);
+	font-weight: 700;
+}
+
+.omp-todo__name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* Closed over total, where dropped counts as closed — a phase that abandoned
+   a task is not stuck, and counting only completions says it is. */
+.omp-todo__count {
+	margin-left: auto;
+	flex: 0 0 auto;
+	color: var(--text-weaker);
+	font-variant-numeric: tabular-nums;
+}
+
+.omp-todo__item {
+	align-items: baseline;
+	padding: 2px 0 2px 14px;
+}
+
+.omp-todo__text {
+	min-width: 0;
+}
+
+.omp-todo__item[data-status="in_progress"] {
+	color: var(--text-interactive-base);
+}
+
+.omp-todo__item[data-status="in_progress"] .omp-todo__mark {
+	color: var(--text-interactive-base);
+}
+
+.omp-todo__item[data-status="blocked"],
+.omp-todo__item[data-status="blocked"] .omp-todo__mark {
+	color: var(--icon-warning-base);
+}
+
+.omp-todo__item[data-status="abandoned"] {
+	color: var(--icon-critical-base);
+	text-decoration: line-through;
+}
+
+.omp-todo__item[data-status="abandoned"] .omp-todo__mark {
+	color: var(--icon-critical-base);
+	text-decoration: none;
+}
+
+.omp-todo__item[data-status="pending"],
+.omp-todo__item[data-status="pending"] .omp-todo__mark {
+	color: var(--text-weaker);
+}
+
+/* Why it is stopped, which is the only thing worth knowing about a stopped
+   task — and the one thing the terminal's strip drops. */
+.omp-todo__blocker {
+	display: block;
+	margin-top: 2px;
+	padding-left: 8px;
+	border-left: var(--omp-bar) solid var(--icon-warning-base);
+	color: var(--text-weak);
+	font-size: var(--font-size-small);
+	text-decoration: none;
+}
+
+/* -- the plan, always in view --------------------------------------------- */
+
+.omp-plan-strip {
+	display: flex;
+	align-items: baseline;
+	gap: 10px;
+	width: 100%;
+	padding: 4px calc(16px + var(--omp-gutter-end)) 4px calc(16px + var(--omp-gutter-start));
+	border: 0;
+	border-top: 1px solid var(--border-base);
+	background: transparent;
+	color: var(--tui-muted);
+	font: inherit;
+	font-size: var(--font-size-small);
+	text-align: left;
+	cursor: default;
+}
+
+.omp-plan-strip:hover {
+	background: color-mix(in srgb, var(--tui-text) 4%, transparent);
+}
+
+.omp-plan-strip__phase {
+	flex: 0 0 auto;
+	color: var(--tui-accent);
+}
+
+.omp-plan-strip__count {
+	flex: 0 0 auto;
+	color: var(--tui-dim);
+	font-variant-numeric: tabular-nums;
+}
+
+/* The task gives up its width first: the phase and the counts are fixed-size
+   and the task is the part that can be a sentence. */
+.omp-plan-strip__task {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.omp-plan-strip__blocked {
+	margin-left: auto;
+	flex: 0 0 auto;
+	color: var(--tui-warning);
+}
+
+/*
+ * Plan mode reads as a state, not a button: accent while the working tree is
+ * read-only, the same colour the terminal's status line uses for it.
+ */
+.omp-picker__trigger[data-plan] {
+	color: var(--text-interactive-base);
+	border-color: var(--border-base);
+}
+
+/* -- a question with options ---------------------------------------------- */
+
+/*
+ * A choice is a line of reading, not a button.
+ *
+ * These used to be `data-component="button"`, which is built for a short action
+ * — it centres its content and sets `white-space: nowrap`. A choice carrying a
+ * sentence of detail therefore came out centred and ran out of the dialog
+ * entirely. Left aligned, full width, wrapping.
+ */
+.omp-option {
+	display: flex;
+	align-items: baseline;
+	gap: 10px;
+	width: 100%;
+	padding: 8px 10px;
+	/*
+	 * No frame. opencode's menu rows carry none — see `dropdown-menu.css`, which
+	 * puts one border on the panel and none on its items — and a bordered row
+	 * inside a bordered dialog read as a box in a box, which is what made this
+	 * dialog look like it came from another application.
+	 */
+	border: 0;
+	border-left: var(--omp-bar) solid transparent;
+	background: transparent;
+	color: inherit;
+	font: inherit;
+	text-align: left;
+	cursor: default;
+}
+
+.omp-option:hover {
+	background: var(--surface-raised-base-hover);
+}
+
+/*
+ * Focus is load-bearing here, not decoration: the first row is focused on open
+ * and the arrows move between them, so this is the only thing that says where a
+ * bare Enter will land.
+ *
+ * Hence the accent bar on top of opencode's raised surface. They mark a menu row
+ * with background alone because their menus are driven by the mouse; this dialog
+ * is driven by the keyboard — numbers, arrows, Enter — and a background shift of
+ * 2% does not carry that much weight. The bar is also the idiom this app already
+ * uses for "this one": the active sidebar row, your turn, the composer.
+ */
+.omp-option:focus-visible,
+.omp-option:focus {
+	outline: none;
+	border-left-color: var(--text-interactive-base);
+	background: var(--surface-raised-base-hover);
+}
+
+/* The number the keyboard handler answers to; printed so the two agree. */
+.omp-option__key {
+	flex: 0 0 auto;
+	width: 1.5ch;
+	color: var(--text-weaker);
+	font-size: var(--font-size-small);
+	text-align: right;
+}
+
+.omp-option:focus .omp-option__key,
+.omp-option:hover .omp-option__key {
+	color: var(--text-interactive-base);
+}
+
+.omp-option__text {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+
+.omp-option__label {
+	color: var(--text-strong);
+	overflow-wrap: anywhere;
+}
+
+/*
+ * Its own line. Run inline after an em dash — which is how this read before —
+ * the label stopped being findable, and a long path pushed the whole row wide.
+ */
+.omp-option__desc {
+	/*
+	 * `--text-base`, not opencode's `--text-weak` for a menu description. On this
+	 * panel (#1c1c1c) `--text-weak` composites to #7c7c7c — 4.08:1, under WCAG
+	 * AA — and this is the line that explains what each button of a destructive
+	 * dialog does. `--text-base` is 7.19:1.
+	 */
+	color: var(--text-base);
+	font-size: var(--font-size-small);
+	line-height: 1.45;
+	overflow-wrap: anywhere;
+}
+
+/*
+ * The scroll now comes from the flex body in the base rule, which bounds itself
+ * against the dialog's own `max-height` rather than against the viewport. A
+ * second cap here fought it: with a plan in the dialog the two disagreed about
+ * how tall the list was allowed to be.
+ */
+
+.omp-modal__options::-webkit-scrollbar {
+	width: 8px;
+}
+
+.omp-modal__options::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+.omp-modal__options::-webkit-scrollbar-thumb {
+	background: var(--text-weaker);
+}
+
+/* Wide enough for a repository path to sit on one line. */
+.omp-modal--wide {
+	width: min(640px, calc(100vw - 16px));
+}
+
+/*
+ * opencode's `data-size="large"` — 800x600 — for a dialog that carries a
+ * document rather than a question. The fixed height is the point: a plan should
+ * scroll inside a dialog of a settled size, not resize it as the agent writes
+ * longer plans.
+ */
+.omp-modal--document {
+	width: min(800px, calc(100vw - 32px));
+	height: min(600px, calc(100vh - 32px));
+}
+
+/* The keyboard, said out loud — the row numbers are otherwise just decoration. */
+.omp-modal__hint {
+	flex: 0 0 auto;
+	margin: 0;
+	padding: 8px 20px 0;
+	color: var(--text-weaker);
+	font-size: var(--font-size-small);
+}
+
+/* -- a dialog that carries a document ------------------------------------- */
+
+/*
+ * The plan itself. It is the thing being approved, so it gets the room and the
+ * scroll; the choices sit under it, which is the order you read them in.
+ */
+.omp-modal__plan {
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow-y: auto;
+	padding: 0 20px 12px;
+	border-bottom: 1px solid var(--border-base);
+}
+
+/*
+ * The markdown renderer resolves twelve `--tui-*` tokens that `tui-theme.css`
+ * declares on `.omp-main` alone. Outside that subtree they are undefined, which
+ * makes each declaration invalid at computed-value time — a plan's headings
+ * would render with no colour at all.
+ *
+ * So they are declared here too, pointed at opencode's tokens rather than
+ * titanium's: the modal is chrome, and the document adapts to the modal rather
+ * than dragging the transcript's palette out of its column. Same mechanism as
+ * the theme file, opposite direction.
+ */
+.omp-modal {
+	--tui-md-heading: var(--text-strong);
+	--tui-md-link: var(--text-interactive-base);
+	--tui-md-list-bullet: var(--text-interactive-base);
+	--tui-md-code: var(--text-strong);
+	--tui-md-code-block: var(--text-base);
+	--tui-md-code-block-border: var(--border-base);
+	--tui-md-quote: var(--text-base);
+	--tui-md-quote-border: var(--border-base);
+	--tui-md-hr: var(--border-base);
+	--tui-border: var(--border-base);
+	--tui-card-bg: var(--background-base);
+	--tui-muted: var(--text-base);
+}
+
+/* -- context menu --------------------------------------------------------- */
+
+/*
+ * Measured against opencode's `dropdown-menu.css`, vendored and not imported:
+ * one border on the panel and none on its rows, `padding: 4px` on the panel and
+ * `4px 8px` on an item, the raised surface a dialog sits on. Flat, because the
+ * radius and shadow it declares are exactly what this app removes.
+ */
+.omp-menu {
+	position: fixed;
+	z-index: 60;
+	min-width: 200px;
+	max-width: 320px;
+	padding: 4px;
+	border: 1px solid var(--border-base);
+	background: var(--surface-raised-stronger-non-alpha);
+	color: var(--text-strong);
+	font-size: var(--font-size-small);
+}
+
+/*
+ * Above the menu's own layer would swallow its clicks; below it catches
+ * everything else. Transparent, so the window is not dimmed — this is a menu,
+ * not a modal.
+ */
+.omp-menu__sheet {
+	position: fixed;
+	inset: 0;
+	z-index: 59;
+}
+
+.omp-menu__item {
+	display: flex;
+	align-items: baseline;
+	gap: 16px;
+	width: 100%;
+	padding: 4px 8px;
+	border: 0;
+	background: transparent;
+	color: var(--text-strong);
+	font: inherit;
+	text-align: left;
+	cursor: default;
+}
+
+.omp-menu__item[data-active] {
+	background: var(--surface-raised-base-hover);
+}
+
+.omp-menu__item[data-danger] {
+	color: var(--icon-critical-base);
+}
+
+/*
+ * Dimmed, but it keeps its `title`, which carries the reason. An entry that is
+ * off and silent about why is worse than one that is not there.
+ */
+.omp-menu__item[aria-disabled="true"] {
+	color: var(--text-weaker);
+	background: transparent;
+}
+
+.omp-menu__label {
+	flex: 1 1 auto;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.omp-menu__hint {
+	flex: 0 0 auto;
+	color: var(--text-weak);
+	font-size: 11px;
+}
+
+.omp-menu__separator {
+	height: 1px;
+	margin: 4px 0;
+	background: var(--border-base);
 }

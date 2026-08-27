@@ -13,30 +13,29 @@
 :root {
 	color-scheme: dark;
 
-	/* --- surfaces ------------------------------------------------------- */
-	/* Near-black, not pure: pure #000 makes the blue vibrate on an OLED. */
-	--background-base: #0d0d0d;
-	/* The user's block and the composer sit one step up from the ground. */
-	--background-weak: #161616;
-	--background-strong: #0d0d0d;
-	--background-stronger: #111111;
-
-	/* --- text ----------------------------------------------------------- */
-	/* Off-white. #fff at this size on this ground reads as glare. */
-	--text-strong: #e8e8e8;
-	--text-stronger: #f2f2f2;
-	--text-base: #b4b4b4;
-	--text-weak: #7d7d7d;
-	--text-weaker: #5a5a5a;
-
-	/* --- lines ---------------------------------------------------------- */
-	/* Barely there. In this design separation comes from space, not rules. */
-	--border-base: rgb(255 255 255 / 7%);
-	--border-focus: rgb(255 255 255 / 22%);
+	/*
+	 * --- what is NOT here ------------------------------------------------
+	 *
+	 * The neutrals — surfaces, text and borders — and the interactive blue come
+	 * from opencode's vendored theme, untouched.
+	 *
+	 * They used to be overridden here, sampled by eye from a screenshot, and two
+	 * of those guesses made the whole app read as one black slab:
+	 *
+	 *   - `--background-base` and `--background-strong` were both `#0d0d0d`, so
+	 *     the sidebar, the chat and the right panel shared a single surface where
+	 *     opencode has four (`#101010`, `#121212`, `#151515`, `#1e1e1e`).
+	 *   - `--border-base` was `7%` against opencode's `19.5%`, so with the
+	 *     surfaces identical the separators could not draw the structure either.
+	 *
+	 * The text went the other way: brighter than opencode's. Near-black grounds
+	 * under near-white text is what "too dark" actually looks like — plenty of
+	 * contrast, no middle greys.
+	 *
+	 * What follows is only what this design genuinely decides differently.
+	 */
 
 	/* --- accents, used sparingly ---------------------------------------- */
-	/* Blue means "yours" or "active": the left bars, the tool square. */
-	--text-interactive-base: #4a8cff;
 	--icon-success-base: #3fb950;
 	--icon-warning-base: #d29922;
 	--icon-critical-base: #f85149;
@@ -53,7 +52,7 @@
 	 * Mono everywhere, including the chrome. Mapping `sans` to the mono stack
 	 * carries the change into the vendored component CSS without touching it.
 	 */
-	--font-family-mono: ui-monospace, "SF Mono", "Menlo", "Cascadia Mono", monospace;
+	--font-family-mono: "MesloLGM Nerd Font", ui-monospace, "SF Mono", "Menlo", "Cascadia Mono", monospace;
 	--font-family-sans: var(--font-family-mono);
 	--font-size-base: 13px;
 	--font-size-small: 12px;

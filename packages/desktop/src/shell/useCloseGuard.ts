@@ -10,6 +10,7 @@
  */
 
 import { useEffect } from "react";
+import { unlistenOnce } from "../rpc/transport";
 
 export function useCloseGuard(isBusy: () => boolean, confirm: () => Promise<boolean>): void {
 	useEffect(() => {
@@ -20,11 +21,15 @@ export function useCloseGuard(isBusy: () => boolean, confirm: () => Promise<bool
 			try {
 				const { getCurrentWindow } = await import("@tauri-apps/api/window");
 				const appWindow = getCurrentWindow();
-				const unlisten = await appWindow.onCloseRequested(async event => {
-					if (!isBusy()) return; // let it close
-					event.preventDefault();
-					if (await confirm()) await appWindow.destroy();
-				});
+				// Idempotent: Tauri's own unlisten throws on a second call and does it
+				// as an unhandled rejection, which would take the window down.
+				const unlisten = unlistenOnce(
+					await appWindow.onCloseRequested(async event => {
+						if (!isBusy()) return; // let it close
+						event.preventDefault();
+						if (await confirm()) await appWindow.destroy();
+					}),
+				);
 				if (cancelled) unlisten();
 				else dispose = unlisten;
 			} catch {

@@ -8,6 +8,24 @@
  *
  * Commands are pinned with `-c core.pager=cat` and `--no-color` so a user's
  * global git config cannot inject pager escapes or ANSI into what we parse.
+ *
+ * ## Records are newline-separated, not NUL-separated
+ *
+ * git's `-z` machine format exists so paths containing spaces, quotes or
+ * newlines survive without escaping. It cannot be read through this transport:
+ * measured against a live `--mode rpc-ui` sidecar, `printf 'AAA\0BBB\0CCC'`
+ * comes back as `"AAABBBCCC"` — the NUL bytes are dropped silently. Of the
+ * plausible separators only TAB and LF survive; VT, RS and US are dropped too.
+ *
+ * So every `-z` command is piped through `tr '\000' '\n'` in the shell, before
+ * the bytes reach the transport. That keeps what `-z` is actually for — no
+ * quoting, no escaping, so paths with spaces and quotes parse correctly — and
+ * gives up only on paths containing a literal newline, which git itself treats
+ * as pathological.
+ *
+ * Without this the records ran together: a status listing rendered as one row
+ * whose path read `…/icons/128x128.png?? packages/desktop/…`, with a status code
+ * embedded in the middle of a filename.
  */
 
 import type { RpcBridge } from "../rpc/bridge";
@@ -56,9 +74,60 @@ async function run(bridge: RpcBridge, command: string): Promise<BashResult> {
 
 const GIT = "git -c core.pager=cat --no-optional-locks";
 
-export async function isRepository(bridge: RpcBridge): Promise<boolean> {
-	const result = await run(bridge, `${GIT} rev-parse --is-inside-work-tree 2>/dev/null`);
-	return result.output.trim() === "true";
+/** Turns git's NUL record separator into one the transport does not eat. */
+const UNZ = "tr '\\000' '\\n'";
+
+/** Every command runs at the repository root, so a path means one thing. */
+function at(root: string): string {
+	return `${GIT} -C ${shellQuote(root)}`;
+}
+
+/** A repo-relative path made absolute, for everything that is not git. */
+export function absolute(root: string, path: string): string {
+	return path.startsWith("/") ? path : `${root.replace(/\/+$/, "")}/${path}`;
+}
+
+/**
+ * Three answers, not two.
+ *
+ * The old check mapped anything that was not the literal `true` to "not a git
+ * repository", so a missing `git`, a shell failure or a directory that no longer
+ * exists all rendered as a confident, wrong statement about the user's project.
+ *
+ * `exitCode` is the discriminator rather than the message, because git's error
+ * is localised — measured on this machine it comes back as *"fatal: no es un
+ * repositorio git"* — so any English match would report the wrong answer for
+ * anyone not running git in English.
+ */
+export type RepositoryState = { kind: "repo"; root: string } | { kind: "none" } | { kind: "unknown"; detail: string };
+
+/**
+ * `--show-toplevel` rather than `--is-inside-work-tree`: it answers the same
+ * question through its exit code *and* hands back the root, which every other
+ * command here needs.
+ *
+ * The root is not a detail. `git status --porcelain` reports paths relative to
+ * the **repository root**, while a pathspec and a `cat` resolve against the
+ * process's working directory. For a session opened anywhere but the root those
+ * are different places, so the file list was right and every follow-up missed —
+ * measured from `packages/desktop/src-tauri`, `git diff HEAD -- <path>` returned
+ * nothing where the same path anchored with `:/` returned 132 lines.
+ */
+export async function repositoryState(bridge: RpcBridge): Promise<RepositoryState> {
+	// stderr stays redirected: outside a repository git writes a localised fatal
+	// there, and merging it in would only give us a blob we cannot match on.
+	const result = await run(bridge, `${GIT} rev-parse --show-toplevel 2>/dev/null`);
+	const output = result.output.trim();
+
+	if (result.exitCode === 0 && output.startsWith("/")) return { kind: "repo", root: output };
+	// 128 is git's own "this is not a repository". Any other non-zero code is
+	// something else failing — git missing from PATH exits 127, for one.
+	if (result.exitCode === 128) return { kind: "none" };
+
+	return {
+		kind: "unknown",
+		detail: output || `\`git rev-parse\` exited with ${result.exitCode ?? "no status"}`,
+	};
 }
 
 /**
@@ -68,10 +137,11 @@ export async function isRepository(bridge: RpcBridge): Promise<boolean> {
  * spaces, quotes or newlines survive intact. Renames emit two NUL-terminated
  * entries (new path, then old).
  */
-export async function changedFiles(bridge: RpcBridge): Promise<ChangedFile[]> {
+export async function changedFiles(bridge: RpcBridge, root: string): Promise<ChangedFile[]> {
+	const git = at(root);
 	const [statusResult, numstatResult] = await Promise.all([
-		run(bridge, `${GIT} status --porcelain=v1 -z --untracked-files=all`),
-		run(bridge, `${GIT} diff HEAD --numstat --no-color -z`),
+		run(bridge, `${git} status --porcelain=v1 -z --untracked-files=all | ${UNZ}`),
+		run(bridge, `${git} diff HEAD --numstat --no-color -z | ${UNZ}`),
 	]);
 
 	const counts = parseNumstat(numstatResult.output);
@@ -86,18 +156,42 @@ export async function changedFiles(bridge: RpcBridge): Promise<ChangedFile[]> {
 }
 
 /** Unified diff for one file, or the whole tree when `path` is omitted. */
-export async function fileDiff(bridge: RpcBridge, path?: string): Promise<FileDiff[]> {
+/**
+ * One file's diff as git printed it, unparsed.
+ *
+ * `fileDiff` returns hunks for rendering; this is for the clipboard, where a
+ * reconstruction from parsed hunks would quietly lose the header lines that
+ * make a diff applicable. Same anchoring as everything else here — commands run
+ * at the repository root, because the panels' paths are relative to it.
+ */
+export async function rawFileDiff(bridge: RpcBridge, root: string, path: string): Promise<string> {
+	const result = await run(
+		bridge,
+		`${at(root)} diff HEAD --no-color --no-ext-diff --unified=3 -- ${shellQuote(path)}`,
+	);
+	return result.output.trim();
+}
+
+export async function fileDiff(bridge: RpcBridge, root: string, path?: string): Promise<FileDiff[]> {
+	const git = at(root);
 	const target = path ? ` -- ${shellQuote(path)}` : "";
 	// `--no-ext-diff` keeps a configured external difftool from replacing the
 	// unified format we parse.
-	const result = await run(bridge, `${GIT} diff HEAD --no-color --no-ext-diff --unified=3${target}`);
+	const result = await run(bridge, `${git} diff HEAD --no-color --no-ext-diff --unified=3${target}`);
 	const diffs = parseUnifiedDiff(result.output);
 
 	// Untracked files never appear in `git diff`; show their contents as additions.
 	if (path && diffs.length === 0) {
-		const untracked = await run(bridge, `${GIT} ls-files --others --exclude-standard -- ${shellQuote(path)}`);
-		if (untracked.output.trim()) {
-			const body = await run(bridge, `cat ${shellQuote(path)}`);
+		const untracked = await run(bridge, `${git} ls-files --others --exclude-standard -- ${shellQuote(path)}`);
+		/*
+		 * The exit code, not emptiness. Given a pathspec it cannot resolve,
+		 * `ls-files` prints a *warning* — localised, so unmatchable — and a check
+		 * for non-empty output took that warning for a file, went on to `cat` it,
+		 * and printed "No such file or directory" into the diff as if it were the
+		 * file's contents.
+		 */
+		if (untracked.exitCode === 0 && untracked.output.trim()) {
+			const body = await run(bridge, `cat ${shellQuote(absolute(root, path))}`);
 			return [
 				{
 					path,
@@ -120,19 +214,55 @@ export async function fileDiff(bridge: RpcBridge, path?: string): Promise<FileDi
 	return diffs;
 }
 
-/** Tracked + untracked paths, for the file tree. */
-export async function listFiles(bridge: RpcBridge, limit = 5000): Promise<string[]> {
-	const result = await run(bridge, `${GIT} ls-files --cached --others --exclude-standard -z | head -c 2000000`);
-	return result.output.split("\0").filter(Boolean).slice(0, limit).sort();
+export interface FileListing {
+	paths: string[];
+	/** The full listing did not fit; what came back is a prefix. */
+	truncated: boolean;
 }
+
+/**
+ * Tracked + untracked paths, for the file tree.
+ *
+ * Bounded on purpose. The shell tool composes its reply through a 50 KB window
+ * and, past it, returns the head, an elision marker and the tail — so asking for
+ * a whole repository got roughly a fifth of it, in two disjoint pieces, with the
+ * marker itself parsed as a filename. Measured on this repo: 6847 paths, 345 KB,
+ * 1253 of them surviving.
+ *
+ * So ask for a number that fits and say when it did not, rather than silently
+ * showing a fifth of a tree as if it were the tree.
+ */
+export async function listFiles(bridge: RpcBridge, root: string, limit = 800): Promise<FileListing> {
+	const result = await run(
+		bridge,
+		`${at(root)} ls-files --cached --others --exclude-standard -z | ${UNZ} | head -n ${limit + 1}`,
+	);
+
+	const lines = result.output.split("\n").filter(Boolean);
+	// The marker only appears when the window cut the stream; it is not a path.
+	const elided = lines.some(line => ELISION.test(line));
+	const paths = lines.filter(line => !ELISION.test(line));
+
+	return {
+		paths: paths.slice(0, limit).sort(),
+		truncated: elided || paths.length > limit,
+	};
+}
+
+/** The shell tool's "output was cut here" marker, e.g. `[…5594ln elided…]`. */
+const ELISION = /\[[^\]]*elided[^\]]*\]/;
 
 // ---------------------------------------------------------------------------
 // Parsing
 // ---------------------------------------------------------------------------
 
-/** `XY <path>\0` records, with renames adding a second `<oldPath>\0`. */
-function splitStatus(raw: string): Array<Omit<ChangedFile, "additions" | "deletions">> {
-	const parts = raw.split("\0");
+/**
+ * `XY <path>` records, one per line, with renames adding a second line holding
+ * the old path. git emits these NUL-separated; see the module header for why
+ * they arrive as newlines instead.
+ */
+export function splitStatus(raw: string): Array<Omit<ChangedFile, "additions" | "deletions">> {
+	const parts = raw.split("\n");
 	const out: Array<Omit<ChangedFile, "additions" | "deletions">> = [];
 
 	for (let i = 0; i < parts.length; i++) {
@@ -172,10 +302,17 @@ function statusOf(index: string, worktree: string): ChangeStatus {
 	}
 }
 
-/** `-z` numstat is `adds\tdels\t<path>\0`, and `-` means binary. */
-function parseNumstat(raw: string): Map<string, { additions: number; deletions: number }> {
+/**
+ * `adds\tdels\t<path>` per line, where `-` means binary. Tabs survive the
+ * transport, so only the record separator needed changing.
+ *
+ * Renames are the one gap: `-z` numstat writes them as an empty path followed by
+ * the old and new paths as their own records, so they fall through to 0/0. The
+ * file still lists — it just shows no line counts.
+ */
+export function parseNumstat(raw: string): Map<string, { additions: number; deletions: number }> {
 	const counts = new Map<string, { additions: number; deletions: number }>();
-	for (const record of raw.split("\0")) {
+	for (const record of raw.split("\n")) {
 		if (!record.trim()) continue;
 		const [adds, dels, ...rest] = record.split("\t");
 		const path = rest.join("\t");

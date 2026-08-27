@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
 import { isTauri } from "../rpc/transport";
+import { pickDirectory } from "../shell/pickDirectory";
 import { FolderPlusIcon } from "./Icons";
 
 /**
@@ -18,12 +19,8 @@ export function AddProjectButton({ onPick }: { onPick(directory: string): void }
 		if (!isTauri()) return;
 		setBusy(true);
 		try {
-			const { open } = await import("@tauri-apps/plugin-dialog");
-			const selected = await open({ directory: true, multiple: false, title: "Choose a folder" });
-			// `open` resolves to null when cancelled, and to string[] if multiple
-			// were ever allowed — narrow both rather than trusting the happy path.
-			const directory = Array.isArray(selected) ? selected[0] : selected;
-			if (typeof directory === "string" && directory) onPick(directory);
+			const directory = await pickDirectory("Choose a project folder");
+			if (directory) onPick(directory);
 		} finally {
 			setBusy(false);
 		}

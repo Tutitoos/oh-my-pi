@@ -64,6 +64,12 @@ export interface ExtensionUiRequestFrame {
 	placeholder?: string;
 	options?: string[];
 	optionDetails?: Array<{ description?: string }>;
+	/*
+	 * Plan review only. Its presence is what says `message` is the plan's
+	 * markdown rather than the prose of an `ask` — declared rather than sniffed,
+	 * because every field this package left as `unknown` has cost a silent bug.
+	 */
+	planFilePath?: string;
 	timeout?: number;
 	/** `open_url` only. */
 	url?: string;
@@ -119,8 +125,36 @@ export type ServerFrame =
 	| AvailableCommandsUpdateFrame
 	| SessionEventFrame;
 
+/** One task. Referenced by its `content`: the tool deliberately has no ids. */
+export interface TodoItem {
+	content: string;
+	status: TodoStatus;
+	/** Only when `status === "blocked"`: what it is waiting for. */
+	blocker?: string;
+}
+
+export interface TodoPhase {
+	name: string;
+	tasks: TodoItem[];
+}
+
+export type TodoStatus = "pending" | "in_progress" | "completed" | "abandoned" | "blocked";
+
 export interface RpcSessionState {
-	model?: { provider?: string; id?: string; contextWindow?: number };
+	model?: {
+		provider?: string;
+		id?: string;
+		contextWindow?: number;
+		/** False for a model that cannot reason at all — then there are no levels. */
+		reasoning?: boolean;
+		/*
+		 * Verified against a live `get_state`, because the CLI serialises this
+		 * differently: `omp models --json` flattens it to a bare string array,
+		 * while the RPC sends the model unflattened. Same field, two shapes —
+		 * the same trap as `args` versus `arguments` on tool calls.
+		 */
+		thinking?: { mode?: string; efforts?: string[] };
+	};
 	thinkingLevel?: string;
 	isStreaming: boolean;
 	isCompacting: boolean;
@@ -133,7 +167,21 @@ export interface RpcSessionState {
 	tokensPerSecond: number | null;
 	messageCount: number;
 	queuedMessageCount: number;
-	todoPhases: unknown[];
+	/**
+	 * The agent's plan, as `tools/todo.ts` declares it.
+	 *
+	 * Typed rather than `unknown[]`, because `unknown[]` is exactly what let the
+	 * panel read `phase.items` for months — a field the *input* to the todo tool
+	 * has and its *state* does not. The state's tasks live under `tasks`.
+	 */
+	todoPhases: TodoPhase[];
+	/**
+	 * Plan mode, when the server reports it.
+	 *
+	 * Absent means an omp too old to say — which is not the same as off, and the
+	 * difference decides whether this client may offer a toggle at all.
+	 */
+	planMode?: { enabled: boolean; planFilePath?: string };
 	/**
 	 * Captured from a live `get_state`: `{ tokens, contextWindow, percent }`.
 	 * Not `used`/`total` — an earlier guess that happened to work only because

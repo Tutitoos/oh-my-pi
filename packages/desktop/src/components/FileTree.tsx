@@ -1,6 +1,9 @@
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { memo, type MouseEvent as ReactMouseEvent, useCallback, useEffect, useMemo, useState } from "react";
 import type { RpcBridge } from "../rpc/bridge";
-import { listFiles } from "../workspace/git";
+import { writeClipboard } from "../shell/clipboard";
+import { useContextMenu } from "../shell/contextMenu";
+import { absolute, listFiles, repositoryState } from "../workspace/git";
+import { fileMenuItems } from "./fileMenu";
 
 interface TreeNode {
 	name: string;
@@ -17,12 +20,49 @@ export function FileTree({ bridge, ready }: { bridge: RpcBridge; ready: boolean 
 	const [query, setQuery] = useState("");
 	const [expanded, setExpanded] = useState<Set<string>>(new Set());
 	const [error, setError] = useState<string | null>(null);
+	const [notice, setNotice] = useState<string | null>(null);
+	/** The repository root, kept so a click can build an absolute path. */
+	const [repoRoot, setRepoRoot] = useState<string | null>(null);
+	const { open: openMenu } = useContextMenu();
 
+	/*
+	 * Anchored at the repository root, like the Changes tab. They used to disagree
+	 * — this listed the session's directory while the diff listed repo-relative
+	 * paths — so the same file had two names depending on which tab you were on.
+	 */
 	useEffect(() => {
 		if (!ready) return;
-		listFiles(bridge)
-			.then(setPaths)
-			.catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)));
+		let cancelled = false;
+		setError(null);
+
+		(async () => {
+			const state = await repositoryState(bridge);
+			if (cancelled) return;
+			if (state.kind !== "repo") {
+				setRepoRoot(null);
+				setPaths([]);
+				// Say which of the two silences this is.
+				setNotice(
+					state.kind === "none" ? "Not a git repository." : `Could not read the repository: ${state.detail}`,
+				);
+				return;
+			}
+			setRepoRoot(state.root);
+			const listing = await listFiles(bridge, state.root);
+			if (cancelled) return;
+			setPaths(listing.paths);
+			setNotice(
+				listing.truncated
+					? `Showing ${listing.paths.length} files. The listing was cut short — the shell caps how much it returns.`
+					: null,
+			);
+		})().catch((cause: unknown) => {
+			if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause));
+		});
+
+		return () => {
+			cancelled = true;
+		};
 	}, [bridge, ready]);
 
 	const visible = useMemo(() => {
@@ -32,10 +72,41 @@ export function FileTree({ bridge, ready }: { bridge: RpcBridge; ready: boolean 
 
 	const root = useMemo(() => buildTree(visible), [visible]);
 
-	const open = useCallback(async (path: string) => {
-		const { openPath } = await import("@tauri-apps/plugin-opener");
-		await openPath(path).catch(() => {});
-	}, []);
+	/*
+	 * Absolute, and loud. The listing is repo-root-relative, which means nothing
+	 * to the OS opener — every click here was a silent no-op, the same bug the
+	 * diff panel had one file over.
+	 */
+	const open = useCallback(
+		async (path: string) => {
+			if (!repoRoot) return;
+			const { openPath } = await import("@tauri-apps/plugin-opener");
+			try {
+				await openPath(absolute(repoRoot, path));
+			} catch (cause) {
+				setError(`Could not open ${path}: ${cause instanceof Error ? cause.message : String(cause)}`);
+			}
+		},
+		[repoRoot],
+	);
+
+	const menu = useCallback(
+		(event: ReactMouseEvent, path: string) => {
+			if (!repoRoot) return;
+			const full = absolute(repoRoot, path);
+			openMenu(
+				event,
+				fileMenuItems({
+					relative: path,
+					absolute: full,
+					open: () => void open(path),
+					reveal: () => void revealFile(full).catch(cause => setError(String(cause))),
+					copy: text => void writeClipboard(text).catch(cause => setError(String(cause))),
+				}),
+			);
+		},
+		[openMenu, repoRoot, open],
+	);
 
 	const toggle = useCallback((path: string) => {
 		setExpanded(current => {
@@ -59,6 +130,7 @@ export function FileTree({ bridge, ready }: { bridge: RpcBridge; ready: boolean 
 			/>
 
 			{error ? <div className="omp-banner omp-banner--error">{error}</div> : null}
+			{notice ? <div className="omp-banner omp-banner--info">{notice}</div> : null}
 
 			<div className="omp-tree__scroll">
 				{paths.length === 0 && !error ? (
@@ -73,6 +145,7 @@ export function FileTree({ bridge, ready }: { bridge: RpcBridge; ready: boolean 
 					forceOpen={filtering}
 					onToggle={toggle}
 					onOpen={open}
+					onMenu={menu}
 				/>
 			</div>
 		</div>
@@ -86,6 +159,7 @@ const TreeLevel = memo(function TreeLevel({
 	forceOpen,
 	onToggle,
 	onOpen,
+	onMenu,
 }: {
 	node: TreeNode;
 	depth: number;
@@ -93,6 +167,7 @@ const TreeLevel = memo(function TreeLevel({
 	forceOpen: boolean;
 	onToggle(path: string): void;
 	onOpen(path: string): void;
+	onMenu(event: ReactMouseEvent, path: string): void;
 }) {
 	const children = [...node.children.values()].sort(directoriesFirst);
 
@@ -125,6 +200,7 @@ const TreeLevel = memo(function TreeLevel({
 								forceOpen={forceOpen}
 								onToggle={onToggle}
 								onOpen={onOpen}
+								onMenu={onMenu}
 							/>
 						) : null}
 					</div>
@@ -160,4 +236,10 @@ export function buildTree(paths: readonly string[]): TreeNode {
 	}
 
 	return root;
+}
+
+/** Show a file in Finder, selected inside its folder rather than opened. */
+async function revealFile(path: string): Promise<void> {
+	const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
+	await revealItemInDir(path);
 }

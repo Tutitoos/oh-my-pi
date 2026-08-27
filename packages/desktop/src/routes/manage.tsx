@@ -21,7 +21,13 @@ const SECTIONS: Array<{ id: Section; label: string }> = [
  */
 export function ManageRoute() {
 	const [section, setSection] = useState<Section>("settings");
-	const { bridge, snapshot } = useBridge("scratch");
+	/*
+	 * Only MCP needs a session. Settings and plugins go through short-lived CLI
+	 * calls, and starting a sidecar for them cost ~4s and ~285MB to look at a
+	 * form — and, with the pool capped at three, could evict a session that was
+	 * mid-turn to make room.
+	 */
+	const { bridge, snapshot } = useBridge("scratch", { autoStart: section === "mcp" });
 
 	return (
 		<main className="omp-main omp-main--manage">

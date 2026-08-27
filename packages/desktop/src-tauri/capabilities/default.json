@@ -1,13 +1,19 @@
 {
 	"$schema": "../gen/schemas/desktop-schema.json",
 	"identifier": "default",
-	"description": "Core permissions for the main window, plus the folder picker and the title bar's drag region. The omp sidecar is owned entirely by Rust, so no shell:* permission is granted — the webview must not be able to spawn it directly and bypass the relay.",
+	"description": "Core permissions for the main window, plus the folder picker, the save dialog for transcript export, the title bar's drag region, revealing a file in Finder and the system clipboard the context menu reads and writes. The omp sidecar is owned entirely by Rust, so no shell:* permission is granted — the webview must not be able to spawn it directly and bypass the relay.",
 	"windows": [
 		"main"
 	],
 	"permissions": [
 		"core:default",
 		"dialog:allow-open",
-		"core:window:allow-start-dragging"
+		"core:window:allow-start-dragging",
+		"opener:allow-open-path",
+		"opener:allow-open-url",
+		"dialog:allow-save",
+		"opener:allow-reveal-item-in-dir",
+		"clipboard-manager:allow-read-text",
+		"clipboard-manager:allow-write-text"
 	]
 }

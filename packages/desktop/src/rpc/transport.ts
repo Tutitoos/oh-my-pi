@@ -97,6 +97,38 @@ export async function readDroppedImage(path: string): Promise<DroppedImage> {
 }
 
 /**
+ * Make a Tauri `unlisten` safe to call, at any time, as many times as you like.
+ *
+ * Tauri's own is neither. The script it injects reads
+ * `listeners[eventId].handlerId` after checking only that the *event* has a
+ * listener map — never that this id is still in it — so a second call throws on
+ * `undefined`. And because `_unlisten` is `async`, that throw never reaches the
+ * caller: it becomes an unhandled rejection, which under `bun dev` is a
+ * full-screen error overlay rather than a line in the console.
+ *
+ * Unsubscribing is not an operation that may fail. Callers get a plain,
+ * synchronous, idempotent function and no way to bring the window down with it.
+ */
+export function unlistenOnce(stop: () => unknown): () => void {
+	let done = false;
+	return () => {
+		if (done) return;
+		done = true;
+		try {
+			void Promise.resolve(stop()).catch(reportUnlistenFailure);
+		} catch (cause) {
+			reportUnlistenFailure(cause);
+		}
+	};
+}
+
+function reportUnlistenFailure(cause: unknown): void {
+	// Nothing to recover: the listener is going away either way, and the webview
+	// outlives it. Worth a line, never worth a crash.
+	console.warn("omp: releasing a Tauri listener failed", cause);
+}
+
+/**
  * Subscribe to Tauri's own drag-and-drop events.
  *
  * `dragDropEnabled` defaults to true, which turns the webview's HTML5 drop off
@@ -109,11 +141,14 @@ export async function onWindowDrop(handler: {
 	drop(paths: readonly string[]): void;
 }): Promise<() => void> {
 	const { getCurrentWebview } = await import("@tauri-apps/api/webview");
-	return getCurrentWebview().onDragDropEvent(event => {
+	// One subscription, four listeners underneath: Tauri's combined stop calls
+	// all four bare, so one stale id takes the other three down with it.
+	const stop = await getCurrentWebview().onDragDropEvent(event => {
 		if (event.payload.type === "over") handler.over();
 		else if (event.payload.type === "leave") handler.leave();
 		else if (event.payload.type === "drop") handler.drop(event.payload.paths);
 	});
+	return unlistenOnce(stop);
 }
 
 /** True when running inside a Tauri webview rather than a plain browser tab. */

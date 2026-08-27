@@ -37,8 +37,23 @@ export function ApprovalModeBadge() {
 		const onDown = (event: MouseEvent) => {
 			if (!root.current?.contains(event.target as Node)) setOpen(false);
 		};
+		/*
+		 * Escape closed nothing here, so it fell through to the session's handler
+		 * and aborted the turn instead. `preventDefault` is what that handler
+		 * checks, so this both closes the menu and spares the turn — the same fix
+		 * the palette and the model menu already carry.
+		 */
+		const onKey = (event: KeyboardEvent) => {
+			if (event.key !== "Escape") return;
+			event.preventDefault();
+			setOpen(false);
+		};
 		document.addEventListener("mousedown", onDown);
-		return () => document.removeEventListener("mousedown", onDown);
+		document.addEventListener("keydown", onKey);
+		return () => {
+			document.removeEventListener("mousedown", onDown);
+			document.removeEventListener("keydown", onKey);
+		};
 	}, [open]);
 
 	const choose = useCallback(async (next: string) => {
@@ -53,36 +68,55 @@ export function ApprovalModeBadge() {
 
 	if (!mode) return null;
 
+	const current = MODES.find(entry => entry.value === mode);
+
 	return (
 		<div className="omp-picker" ref={root}>
 			<button
 				className="omp-picker__trigger"
 				type="button"
 				data-warn={mode === "yolo" || undefined}
+				aria-haspopup="menu"
+				aria-expanded={open}
 				onClick={() => setOpen(value => !value)}
 				title="Tool approval mode"
 			>
 				{mode}
+				<span className="omp-picker__caret" aria-hidden="true" />
 			</button>
 
 			{open ? (
-				<div className="omp-picker__menu omp-picker__menu--narrow">
-					{MODES.map(entry => (
-						<button
-							className="omp-slash__item"
-							key={entry.value}
-							type="button"
-							data-active={entry.value === mode || undefined}
-							onClick={() => void choose(entry.value)}
-						>
-							<span className="omp-slash__name">{entry.label}</span>
-							<span className="omp-slash__desc">{entry.hint}</span>
-						</button>
-					))}
+				/*
+				 * A radio group, and now it says so. It was a list of plain buttons
+				 * whose only mark of the active one was a darker fill — which read as
+				 * a selection artefact rather than a choice.
+				 */
+				<div className="omp-picker__menu omp-picker__menu--narrow" role="menu" aria-label="Tool approval mode">
+					{MODES.map(entry => {
+						const active = entry.value === mode;
+						return (
+							<button
+								className="omp-choice"
+								key={entry.value}
+								type="button"
+								role="menuitemradio"
+								aria-checked={active}
+								onClick={() => void choose(entry.value)}
+							>
+								<span className="omp-choice__mark" aria-hidden="true">
+									{active ? "✓" : ""}
+								</span>
+								<span className="omp-choice__text">
+									<span className="omp-choice__name">{entry.label}</span>
+									<span className="omp-choice__desc">{entry.hint}</span>
+								</span>
+							</button>
+						);
+					})}
 					<p className="omp-picker__note">
 						{saved
-							? `Saved. Applies to sessions started from now on — this one keeps its current mode.`
-							: `Changing this affects new sessions; a running one keeps the mode it started with.`}
+							? "Saved. Applies to sessions started from now on — this one keeps its current mode."
+							: `This session stays on ${current?.label ?? mode}. The change applies to sessions started from now on.`}
 					</p>
 				</div>
 			) : null}

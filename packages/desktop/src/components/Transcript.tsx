@@ -1,7 +1,11 @@
-import { memo, useEffect, useLayoutEffect, useRef } from "react";
-import type { TranscriptEntry } from "../rpc/transcript";
+import { Markdown } from "@oh-my-pi/collab-web/src/components/transcript/Markdown";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef } from "react";
+import { compactionMethodLabel, compactTokens } from "../rpc/compaction";
+import type { CompactionEntry, TranscriptEntry } from "../rpc/transcript";
 import { messageText, thinkingText } from "../rpc/transcript";
+import { useContextMenu } from "../shell/contextMenu";
 import { ToolCard } from "./ToolCard";
+import { codeBlockAt, selectionWithin, transcriptMenuItems } from "./transcriptMenu";
 
 /**
  * Not virtualized, deliberately. collab-web renders full transcripts the same
@@ -55,6 +59,22 @@ export const Transcript = memo(function Transcript({
 		return () => observer.disconnect();
 	}, []);
 
+	/*
+	 * Links leave for the system browser.
+	 *
+	 * The renderer emits `target="_blank"`, which in a webview opens a second
+	 * webview rather than a browser. Delegated here instead of per-link because
+	 * the markup comes from `dangerouslySetInnerHTML` and has no React handlers
+	 * to attach to.
+	 */
+	const onLinkClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+		const anchor = (event.target as HTMLElement).closest?.("a[href]");
+		const href = anchor?.getAttribute("href");
+		if (!href || !/^(?:https?:|mailto:)/i.test(href)) return;
+		event.preventDefault();
+		void import("@tauri-apps/plugin-opener").then(({ openUrl }) => openUrl(href)).catch(() => {});
+	}, []);
+
 	if (entries.length === 0 && !streaming) {
 		return (
 			<div className="omp-transcript" ref={scroller}>
@@ -74,21 +94,60 @@ export const Transcript = memo(function Transcript({
 			(tail.kind === "message" && tail.streaming && !messageText(tail.content) && !thinkingText(tail.content)));
 
 	return (
-		<div className="omp-transcript" ref={scroller}>
-			{entries.map(entry =>
-				entry.kind === "tool" ? (
-					<div className="omp-entry omp-entry--tool" key={entry.id}>
-						<ToolCard entry={entry} />
-					</div>
-				) : (
-					<MessageBubble key={entry.id} entry={entry} />
-				),
-			)}
+		// Delegated click: the anchors it catches are keyboard-native already.
+		<div className="omp-transcript" ref={scroller} onClick={onLinkClick}>
+			{entries.map(entry => {
+				if (entry.kind === "tool") {
+					return (
+						<div className="omp-entry omp-entry--tool" key={entry.id}>
+							<ToolCard entry={entry} />
+						</div>
+					);
+				}
+				if (entry.kind === "compaction") return <CompactionRule key={entry.id} entry={entry} />;
+				return <MessageBubble key={entry.id} entry={entry} />;
+			})}
 
 			{awaitingOutput ? <WorkingIndicator /> : null}
 		</div>
 	);
 });
+
+/**
+ * The rule the TUI draws where a compaction rewrote the history.
+ *
+ * Everything above it was replaced by a summary, so this is not decoration: it
+ * is the boundary between what the model still remembers and what it does not.
+ * The summary itself opens on demand — it is long, and the point of the line is
+ * that the rewrite happened here.
+ */
+function CompactionRule({ entry }: { entry: CompactionEntry }) {
+	const amount =
+		entry.tokensBefore !== undefined && entry.tokensAfter !== undefined
+			? `${compactTokens(entry.tokensBefore)}→${compactTokens(entry.tokensAfter)}`
+			: undefined;
+	const summary = entry.summary ?? entry.shortSummary;
+
+	return (
+		<div className="omp-entry omp-compaction">
+			<div className="omp-compaction__bar">
+				<span className="omp-compaction__label">{compactionMethodLabel(entry.method)}</span>
+				{amount ? <span className="omp-compaction__amount">{amount}</span> : null}
+				{entry.warning ? (
+					<span className="omp-compaction__warning" title={entry.warning}>
+						{entry.warning}
+					</span>
+				) : null}
+			</div>
+			{summary ? (
+				<details className="omp-compaction__details">
+					<summary>What was kept</summary>
+					<div className="omp-compaction__summary">{summary}</div>
+				</details>
+			) : null}
+		</div>
+	);
+}
 
 /** Three dots is the smallest honest "it is alive" signal. */
 function WorkingIndicator() {
@@ -105,6 +164,7 @@ function WorkingIndicator() {
 }
 
 const MessageBubble = memo(function MessageBubble({ entry }: { entry: Extract<TranscriptEntry, { kind: "message" }> }) {
+	const { open: openMenu } = useContextMenu();
 	const thinking = thinkingText(entry.content);
 	const text = messageText(entry.content);
 	if (!thinking && !text) return null;
@@ -118,9 +178,34 @@ const MessageBubble = memo(function MessageBubble({ entry }: { entry: Extract<Tr
 				</div>
 			) : null}
 			{text ? (
-				<div className={`omp-entry omp-entry--${entry.role}`}>
+				<div
+					className={`omp-entry omp-entry--${entry.role}`}
+					onContextMenu={event => {
+						openMenu(
+							event,
+							transcriptMenuItems({
+								text,
+								selection: selectionWithin(event.currentTarget),
+								codeBlock: codeBlockAt(event.target),
+								report: () => {},
+							}),
+						);
+					}}
+				>
 					<div className="omp-entry__role">{entry.role}</div>
-					<div className="omp-entry__body">{text}</div>
+					{/*
+					 * Rendered, not printed. The transcript showed the model's markdown
+					 * verbatim — `**bold**` with its asterisks, backticks around every
+					 * path, list dashes flush left.
+					 *
+					 * This is collab-web's renderer, the same one the hosted client uses.
+					 * It never emits raw HTML (its `html` token handler escapes) and
+					 * `safeHref` drops `javascript:` and `data:`, which is what makes the
+					 * `dangerouslySetInnerHTML` behind it defensible for model output.
+					 */}
+					<div className="omp-entry__body">
+						<Markdown text={text} />
+					</div>
 				</div>
 			) : null}
 		</>

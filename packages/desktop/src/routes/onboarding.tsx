@@ -95,7 +95,8 @@ export function OnboardingRoute() {
 										<code className="omp-setting__key">{provider.id}</code>
 									</div>
 									<div className="omp-setting__control">
-										<span className="omp-status-dot omp-status-dot--complete" />
+										{/* Same class the sidebar uses; the old one was deleted by the restyle. */}
+										<span className="omp-dot omp-dot--done" aria-label="connected" />
 									</div>
 								</div>
 							))}

@@ -1,6 +1,18 @@
-import { memo, useCallback, useEffect, useState } from "react";
+import { memo, type MouseEvent as ReactMouseEvent, useCallback, useEffect, useRef, useState } from "react";
 import type { RpcBridge } from "../rpc/bridge";
-import { type ChangedFile, changedFiles, type FileDiff, fileDiff, isRepository } from "../workspace/git";
+import { writeClipboard } from "../shell/clipboard";
+import { useContextMenu } from "../shell/contextMenu";
+import {
+	absolute,
+	type ChangedFile,
+	changedFiles,
+	type FileDiff,
+	fileDiff,
+	type RepositoryState,
+	rawFileDiff,
+	repositoryState,
+} from "../workspace/git";
+import { fileMenuItems } from "./fileMenu";
 
 /**
  * Read-only view of what the session changed.
@@ -9,11 +21,11 @@ import { type ChangedFile, changedFiles, type FileDiff, fileDiff, isRepository }
  * editor drags in highlighting, LSP and — the hard part — reconciling your edits
  * with the agent writing the same file underneath you.
  */
-export function DiffPanel({ bridge, ready }: { bridge: RpcBridge; ready: boolean }) {
+export function DiffPanel({ bridge, ready, streaming }: { bridge: RpcBridge; ready: boolean; streaming: boolean }) {
 	const [files, setFiles] = useState<ChangedFile[]>([]);
 	const [selected, setSelected] = useState<string | null>(null);
 	const [diff, setDiff] = useState<FileDiff[]>([]);
-	const [repo, setRepo] = useState<boolean | null>(null);
+	const [repo, setRepo] = useState<RepositoryState | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
 
@@ -22,9 +34,9 @@ export function DiffPanel({ bridge, ready }: { bridge: RpcBridge; ready: boolean
 		setBusy(true);
 		setError(null);
 		try {
-			const inRepo = await isRepository(bridge);
-			setRepo(inRepo);
-			setFiles(inRepo ? await changedFiles(bridge) : []);
+			const state = await repositoryState(bridge);
+			setRepo(state);
+			setFiles(state.kind === "repo" ? await changedFiles(bridge, state.root) : []);
 		} catch (cause) {
 			setError(cause instanceof Error ? cause.message : String(cause));
 		} finally {
@@ -36,13 +48,26 @@ export function DiffPanel({ bridge, ready }: { bridge: RpcBridge; ready: boolean
 		void refresh();
 	}, [refresh]);
 
+	/*
+	 * Re-read when a turn ends. The panel is called "Changes" and the agent is
+	 * what changes things, so a list that only moved when you pressed Refresh was
+	 * showing the state of the repository before the work you just watched.
+	 */
+	const wasStreaming = useRef(false);
 	useEffect(() => {
-		if (!selected) {
+		if (wasStreaming.current && !streaming) void refresh();
+		wasStreaming.current = streaming;
+	}, [streaming, refresh]);
+
+	const root = repo?.kind === "repo" ? repo.root : null;
+
+	useEffect(() => {
+		if (!selected || !root) {
 			setDiff([]);
 			return;
 		}
 		let cancelled = false;
-		fileDiff(bridge, selected)
+		fileDiff(bridge, root, selected)
 			.then(result => {
 				if (!cancelled) setDiff(result);
 			})
@@ -52,15 +77,88 @@ export function DiffPanel({ bridge, ready }: { bridge: RpcBridge; ready: boolean
 		return () => {
 			cancelled = true;
 		};
-	}, [bridge, selected]);
+		/*
+		 * `repo`, not just `root`: a refresh mints a new state object but the same
+		 * root string, so keying on the string alone left every dependency
+		 * identical and the open diff never re-read — the file list updated around
+		 * a body that still showed the previous contents.
+		 */
+	}, [bridge, repo, root, selected]);
 
-	const openInEditor = useCallback(async (path: string) => {
-		const { openPath } = await import("@tauri-apps/plugin-opener");
-		await openPath(path).catch(() => {});
-	}, []);
+	/*
+	 * Absolute, and loud when it fails. The path from `git status` is relative to
+	 * the repository root, which means nothing to the OS opener — so a double
+	 * click quietly did nothing, and `.catch(() => {})` made sure you never found
+	 * out why.
+	 */
+	const openInEditor = useCallback(
+		async (path: string) => {
+			if (!root) return;
+			const { openPath } = await import("@tauri-apps/plugin-opener");
+			try {
+				await openPath(absolute(root, path));
+			} catch (cause) {
+				setError(`Could not open ${path}: ${cause instanceof Error ? cause.message : String(cause)}`);
+			}
+		},
+		[root],
+	);
 
-	if (repo === false) {
+	const { open: openMenu } = useContextMenu();
+
+	const menu = useCallback(
+		(event: ReactMouseEvent, path: string) => {
+			if (!root) return;
+			const full = absolute(root, path);
+			const fail = (cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause));
+			openMenu(
+				event,
+				fileMenuItems({
+					relative: path,
+					absolute: full,
+					open: () => void openInEditor(path),
+					reveal: () =>
+						void import("@tauri-apps/plugin-opener")
+							.then(({ revealItemInDir }) => revealItemInDir(full))
+							.catch(fail),
+					copy: text => void writeClipboard(text).catch(fail),
+					// Re-read rather than reuse what is on screen: the open diff may be
+					// another file's, and the panel only holds one at a time.
+					copyDiff: () => void rawFileDiff(bridge, root, path).then(writeClipboard).catch(fail),
+				}),
+			);
+		},
+		[openMenu, root, openInEditor, bridge],
+	);
+
+	if (repo?.kind === "none") {
 		return <div className="omp-empty">Not a git repository.</div>;
+	}
+
+	/*
+	 * Say what happened instead of asserting something false. This branch used to
+	 * be folded into "not a git repository", which is what a missing `git` looked
+	 * like from the outside.
+	 */
+	if (repo?.kind === "unknown") {
+		return (
+			<div className="omp-diff">
+				<div className="omp-banner omp-banner--error">Could not read the repository: {repo.detail}</div>
+				<div className="omp-diff__head">
+					<span>&nbsp;</span>
+					<button
+						type="button"
+						data-component="button"
+						data-variant="ghost"
+						data-size="normal"
+						onClick={() => void refresh()}
+						disabled={busy}
+					>
+						{busy ? "…" : "Retry"}
+					</button>
+				</div>
+			</div>
+		);
 	}
 
 	return (
@@ -99,11 +197,19 @@ export function DiffPanel({ bridge, ready }: { bridge: RpcBridge; ready: boolean
 						title={file.from ? `${file.from} → ${file.path}` : file.path}
 						onClick={() => setSelected(file.path === selected ? null : file.path)}
 						onDoubleClick={() => void openInEditor(file.path)}
+						onContextMenu={event => menu(event, file.path)}
 					>
 						<span className={`omp-diff__status omp-diff__status--${file.status}`}>
 							{statusLetter(file.status)}
 						</span>
-						<span className="omp-diff__path">{file.path}</span>
+						{/*
+						 * Name first, directory after it and dimmed. Every row in a panel
+						 * this narrow shared the same long prefix, so truncation ate the
+						 * one part you scan for — the filename. Now the name is never
+						 * truncated and the directory gives way instead.
+						 */}
+						<span className="omp-diff__name">{fileName(file.path)}</span>
+						<span className="omp-diff__dir">{dirName(file.path)}</span>
 						<ChangeBars additions={file.additions} deletions={file.deletions} />
 					</button>
 				))}
@@ -124,13 +230,21 @@ export function DiffPanel({ bridge, ready }: { bridge: RpcBridge; ready: boolean
 	);
 }
 
-/** opencode's +N/−N badge. */
+/**
+ * The +N/−N counts.
+ *
+ * Written here rather than through opencode's vendored `diff-changes` component,
+ * which carried `justify-content: flex-end`: any row where its box came out
+ * narrower than its text pushed the numbers out of the *left* edge and printed
+ * them over the path — `rpc-mode.t+20 −0`. Two spans we size ourselves cannot do
+ * that, and it was the last vendored component left.
+ */
 const ChangeBars = memo(function ChangeBars({ additions, deletions }: { additions: number; deletions: number }) {
 	if (!additions && !deletions) return null;
 	return (
-		<span data-component="diff-changes" data-variant="bars">
-			<span data-slot="diff-changes-additions">+{additions}</span>
-			<span data-slot="diff-changes-deletions">−{deletions}</span>
+		<span className="omp-diff__counts">
+			{additions > 0 ? <span className="omp-diff__count omp-diff__count--add">+{additions}</span> : null}
+			{deletions > 0 ? <span className="omp-diff__count omp-diff__count--del">−{deletions}</span> : null}
 		</span>
 	);
 });
@@ -167,6 +281,26 @@ function sign(kind: string): string {
 	if (kind === "add") return "+";
 	if (kind === "del") return "−";
 	return " ";
+}
+
+function fileName(path: string): string {
+	return path.split("/").at(-1) || path;
+}
+
+/**
+ * The last two directory segments, which is the part that identifies a file.
+ *
+ * This used to be the whole directory truncated by CSS with `direction: rtl`, to
+ * keep the tail visible. That is a typographic trick with a bidi bug in it: a
+ * leading neutral takes the paragraph level and lands at the far end, so
+ * `.github/workflows` rendered as `github/workflows.` — every dot-directory in
+ * the repo. Choosing the segments here says the same thing and cannot reorder.
+ */
+function dirName(path: string): string {
+	const cut = path.lastIndexOf("/");
+	if (cut === -1) return "";
+	const parts = path.slice(0, cut).split("/");
+	return parts.length <= 2 ? parts.join("/") : `…/${parts.slice(-2).join("/")}`;
 }
 
 function statusLetter(status: ChangedFile["status"]): string {

@@ -6,6 +6,7 @@ import { ManageRoute } from "./routes/manage";
 import { OnboardingRoute } from "./routes/onboarding";
 import { ProbeRoute } from "./routes/probe";
 import { SessionRoute } from "./routes/session";
+import { ContextMenuProvider } from "./shell/contextMenu";
 import "./styles/index.css";
 
 /**
@@ -32,6 +33,10 @@ if (!root) throw new Error("#root missing from index.html");
 
 createRoot(root).render(
 	<StrictMode>
-		<RouterProvider router={router} />
+		{/* Above the router: every route is a child of `App`, and `App` itself
+		    needs the menu for the empty space between its columns. */}
+		<ContextMenuProvider>
+			<RouterProvider router={router} />
+		</ContextMenuProvider>
 	</StrictMode>,
 );

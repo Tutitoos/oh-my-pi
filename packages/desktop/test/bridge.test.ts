@@ -58,6 +58,11 @@ class MockTransport implements Transport {
 		this.#emit?.({ event: "fault", data: { tabId: this.#tabId, message } });
 	}
 
+	/** The pool reclaiming this session's slot. Routine, not a crash. */
+	evict(): void {
+		this.#emit?.({ event: "evicted", data: { tabId: this.#tabId } });
+	}
+
 	/** The `id` the bridge minted for the Nth command it sent. */
 	idOf(index: number): string {
 		return JSON.parse(this.sent[index]).id;
@@ -451,5 +456,597 @@ describe("RpcBridge — stall watchdog", () => {
 
 		expect(bridge.getSnapshot().status).toBe("exited");
 		expect(bridge.getSnapshot().stalled).toBe(false);
+	});
+});
+
+describe("RpcBridge — the plan", () => {
+	/*
+	 * Mid-turn is the whole point: a phase closes while the agent is still
+	 * working, and `get_state` is only asked for at turn boundaries.
+	 */
+	test("a todo tool result updates the plan without a round trip", async () => {
+		const { transport, bridge } = await connected();
+		const before = transport.sent.length;
+
+		transport.frames({
+			type: "tool_execution_end",
+			toolCallId: "t1",
+			toolName: "todo",
+			isError: false,
+			result: {
+				content: [],
+				details: {
+					op: "done",
+					phases: [{ name: "Research", tasks: [{ content: "Read it", status: "completed" }] }],
+				},
+			},
+		});
+		await settle();
+
+		expect(bridge.getSnapshot().todoPhases).toEqual([
+			{ name: "Research", tasks: [{ content: "Read it", status: "completed", blocker: undefined }] },
+		]);
+		// No `get_state` was needed — the result carried the plan itself.
+		expect(transport.sent.slice(before).map(line => JSON.parse(line).type)).not.toContain("get_state");
+	});
+
+	test("another tool's result leaves the plan alone", async () => {
+		const { transport, bridge } = await connected();
+		transport.frames({
+			type: "tool_execution_end",
+			toolCallId: "t1",
+			toolName: "todo",
+			isError: false,
+			result: { content: [], details: { phases: [{ name: "Research", tasks: [] }] } },
+		});
+		await settle();
+		transport.frames({
+			type: "tool_execution_end",
+			toolCallId: "t2",
+			toolName: "bash",
+			isError: false,
+			result: { content: [] },
+		});
+		await settle();
+
+		expect(bridge.getSnapshot().todoPhases).toHaveLength(1);
+	});
+});
+
+describe("RpcBridge — booted", () => {
+	/*
+	 * `status: "ready"` means the process answered something; it says nothing
+	 * about the boot sequence being over. `switch_session` aborts the session,
+	 * and an abort kills any `bash` in flight — so a panel that fired its first
+	 * git command on `ready` had it cancelled, every time a chat was opened.
+	 */
+	test("a replying process is not yet a booted one", async () => {
+		const { transport, bridge } = await connected();
+		void bridge.getState();
+		await settle();
+		transport.frames({
+			type: "response",
+			id: transport.idOf(0),
+			command: "get_state",
+			success: true,
+			data: { isStreaming: false, sessionId: "s" },
+		});
+		await settle();
+
+		expect(bridge.getSnapshot().status).toBe("ready");
+		expect(bridge.getSnapshot().booted).toBe(false);
+
+		bridge.markBooted();
+		await settle();
+		expect(bridge.getSnapshot().booted).toBe(true);
+	});
+
+	test("restarting takes it back", async () => {
+		const { bridge } = await connected();
+		bridge.markBooted();
+		await settle();
+		expect(bridge.getSnapshot().booted).toBe(true);
+
+		await bridge.start();
+		await settle();
+		expect(bridge.getSnapshot().booted).toBe(false);
+	});
+});
+
+describe("RpcBridge — compaction", () => {
+	/*
+	 * The typed command, not `/compact` as a prompt. It went the long way round
+	 * while `compact` was handled inside the server's serial command queue —
+	 * which meant an `abort` sat behind the very operation it was meant to stop.
+	 * `compact` now bypasses that queue, so the typed command is usable again.
+	 */
+	test("compacting goes out as the compact command", async () => {
+		const { transport, bridge } = await connected();
+		void bridge.startCompaction();
+		await settle();
+
+		expect(transport.typeOf(0)).toBe("compact");
+	});
+
+	test("the session shows a compaction in flight until the engine says it ended", async () => {
+		const { transport, bridge } = await connected();
+		void bridge.startCompaction();
+		await settle();
+		expect(bridge.getSnapshot().compaction).toMatchObject({ origin: "manual" });
+
+		// The engine names the method it settled on without restarting the clock.
+		transport.frames({ type: "auto_compaction_start", reason: "manual", action: "remote" });
+		await settle();
+		expect(bridge.getSnapshot().compaction).toMatchObject({ origin: "manual", action: "remote" });
+
+		transport.frames({
+			type: "auto_compaction_end",
+			action: "remote",
+			aborted: false,
+			willRetry: false,
+			tokensAfter: 32599,
+			result: { summary: "s", tokensBefore: 87272 },
+		});
+		await settle();
+
+		expect(bridge.getSnapshot().compaction).toBeNull();
+		// And the boundary is in the transcript, built from the event itself.
+		expect(bridge.getSnapshot().transcript.at(-1)).toMatchObject({
+			kind: "compaction",
+			tokensBefore: 87272,
+			tokensAfter: 32599,
+		});
+	});
+
+	/*
+	 * Measured against the running app: the server had committed the compaction
+	 * six minutes before the spinner was still on screen. The banner was waiting
+	 * for an event, and an event you can miss is not a backstop — the command's
+	 * own response is.
+	 */
+	test("the command response ends it even if the event never lands", async () => {
+		const { transport, bridge } = await connected();
+		void bridge.startCompaction();
+		await settle();
+		expect(bridge.getSnapshot().compaction).not.toBeNull();
+
+		transport.frames({
+			type: "response",
+			id: transport.idOf(0),
+			command: "compact",
+			success: true,
+			data: { summary: "s", tokensBefore: 87272 },
+		});
+		await settle();
+
+		expect(bridge.getSnapshot().compaction).toBeNull();
+	});
+
+	test("event then response reloads the history once, not twice", async () => {
+		const { transport, bridge } = await connected();
+		void bridge.startCompaction();
+		await settle();
+		const before = transport.sent.length;
+
+		transport.frames({ type: "auto_compaction_end", action: "remote", aborted: false, willRetry: false });
+		transport.frames({ type: "response", id: transport.idOf(0), command: "compact", success: true, data: {} });
+		await settle();
+
+		const reloads = transport.sent.slice(before).filter(line => JSON.parse(line).type === "get_messages");
+		expect(reloads).toHaveLength(1);
+		expect(bridge.getSnapshot().compaction).toBeNull();
+	});
+
+	/*
+	 * "Already compacted" is what the engine says when there is nothing new to
+	 * compact. It arrives as a thrown error, but to someone who just pressed the
+	 * button it is an answer — a red "Compaction failed" overstates it.
+	 */
+	test("nothing-to-do reads as a note, not a failure", async () => {
+		const { transport, bridge } = await connected();
+		void bridge.startCompaction();
+		await settle();
+		transport.frames({
+			type: "response",
+			id: transport.idOf(0),
+			command: "compact",
+			success: false,
+			error: "Already compacted",
+			code: "already_compacted",
+		});
+		await settle();
+
+		expect(bridge.getSnapshot().error).toBeNull();
+		expect(bridge.getSnapshot().warning).toBe("Already compacted");
+	});
+
+	/*
+	 * The banner used to live only on edges. This is the anchor: whatever frame
+	 * goes missing, the next state refresh corrects it — measured against a real
+	 * session whose compaction had committed while the spinner was still up.
+	 */
+	test("a state refresh corrects a banner left up by a missed frame", async () => {
+		const { transport, bridge } = await connected();
+		void bridge.startCompaction();
+		await settle();
+		// The server confirms it started; then its end frame never arrives.
+		transport.frames({ type: "auto_compaction_start", reason: "manual", action: "remote" });
+		await settle();
+		expect(bridge.getSnapshot().compaction).not.toBeNull();
+
+		void bridge.getState();
+		await settle();
+		const index = transport.sent.findIndex(line => JSON.parse(line).type === "get_state");
+		transport.frames({
+			type: "response",
+			id: transport.idOf(index),
+			command: "get_state",
+			success: true,
+			data: { isStreaming: false, isCompacting: false, sessionId: "s" },
+		});
+		await settle();
+
+		expect(bridge.getSnapshot().compaction).toBeNull();
+	});
+
+	/*
+	 * The anchor only helps if something asks. With the session otherwise idle
+	 * nothing does, so a compaction that finished left the spinner up for good.
+	 * While one is open, this client asks on its own.
+	 */
+	test("an open compaction polls the server on its own", async () => {
+		const { transport, bridge } = await connected();
+		void bridge.startCompaction();
+		await settle();
+		const before = transport.sent.filter(line => JSON.parse(line).type === "get_state").length;
+
+		await new Promise(resolve => setTimeout(resolve, 4500));
+
+		const after = transport.sent.filter(line => JSON.parse(line).type === "get_state").length;
+		expect(after).toBeGreaterThan(before);
+	}, 10_000);
+
+	test("and stops asking once it is over", async () => {
+		const { transport, bridge } = await connected();
+		void bridge.startCompaction();
+		await settle();
+		transport.frames({ type: "response", id: transport.idOf(0), command: "compact", success: true, data: {} });
+		await settle();
+		const settledCount = transport.sent.filter(line => JSON.parse(line).type === "get_state").length;
+
+		await new Promise(resolve => setTimeout(resolve, 4500));
+
+		expect(transport.sent.filter(line => JSON.parse(line).type === "get_state")).toHaveLength(settledCount);
+	}, 10_000);
+
+	/* And it must not fire before the server has begun. */
+	test("a refresh does not cancel a compaction the server has yet to start", async () => {
+		const { transport, bridge } = await connected();
+		void bridge.startCompaction();
+		await settle();
+
+		void bridge.getState();
+		await settle();
+		const index = transport.sent.findIndex(line => JSON.parse(line).type === "get_state");
+		transport.frames({
+			type: "response",
+			id: transport.idOf(index),
+			command: "get_state",
+			success: true,
+			data: { isStreaming: false, isCompacting: false, sessionId: "s" },
+		});
+		await settle();
+
+		expect(bridge.getSnapshot().compaction).not.toBeNull();
+	});
+
+	test("a refusal is reported instead of swallowed", async () => {
+		const { transport, bridge } = await connected();
+		void bridge.startCompaction();
+		await settle();
+		transport.frames({
+			type: "response",
+			id: transport.idOf(0),
+			command: "compact",
+			success: false,
+			error: "Compaction already in progress",
+		});
+		await settle();
+
+		expect(bridge.getSnapshot().compaction).toBeNull();
+		expect(bridge.getSnapshot().error).toContain("Compaction already in progress");
+	});
+
+	test("an error can be dismissed", async () => {
+		const { transport, bridge } = await connected();
+		void bridge.startCompaction();
+		await settle();
+		transport.frames({
+			type: "response",
+			id: transport.idOf(0),
+			command: "compact",
+			success: false,
+			error: "No model selected",
+		});
+		await settle();
+		expect(bridge.getSnapshot().error).not.toBeNull();
+
+		bridge.clearError();
+		await settle();
+		// It used to survive until the process was restarted.
+		expect(bridge.getSnapshot().error).toBeNull();
+	});
+
+	/* Cancelling is the operator's own doing, so the rejection it causes is not
+	   a failure to report back at them. */
+	test("cancelling takes the banner down without an error", async () => {
+		const { transport, bridge } = await connected();
+		void bridge.startCompaction();
+		await settle();
+		expect(bridge.getSnapshot().compaction).not.toBeNull();
+
+		void bridge.cancelCompaction();
+		await settle();
+		const abortIndex = transport.sent.findIndex(line => JSON.parse(line).type === "abort_compact");
+		expect(abortIndex).toBeGreaterThanOrEqual(0);
+		transport.frames({ type: "response", id: transport.idOf(abortIndex), command: "abort_compact", success: true });
+		transport.frames({
+			type: "response",
+			id: transport.idOf(0),
+			command: "compact",
+			success: false,
+			error: "Compaction cancelled",
+		});
+		await settle();
+
+		expect(bridge.getSnapshot().compaction).toBeNull();
+		expect(bridge.getSnapshot().error).toBeNull();
+	});
+
+	test("an automatic pass brackets itself", async () => {
+		const { transport, bridge } = await connected();
+		transport.frames({ type: "auto_compaction_start", reason: "threshold", action: "remote" });
+		await settle();
+		expect(bridge.getSnapshot().compaction).toMatchObject({ origin: "auto", action: "remote" });
+
+		transport.frames({ type: "auto_compaction_end", action: "remote", aborted: false, willRetry: false });
+		await settle();
+		expect(bridge.getSnapshot().compaction).toBeNull();
+	});
+
+	/*
+	 * The automatic path emits its end event from inside its own try block, with
+	 * the prompt that triggered it still in flight — so paging is refused with
+	 * `session_busy` every time. Re-reading has to use the unpaged command.
+	 */
+	test("reloading after a compaction does not page", async () => {
+		const { transport } = await connected();
+		const before = transport.sent.length;
+
+		transport.frames({ type: "auto_compaction_start", reason: "threshold", action: "remote" });
+		transport.frames({ type: "auto_compaction_end", action: "remote", aborted: false, willRetry: false });
+		await settle();
+
+		const asked = transport.sent.slice(before).map(line => JSON.parse(line).type);
+		expect(asked).toContain("get_messages");
+		expect(asked).not.toContain("get_messages_page");
+	});
+
+	/*
+	 * "Auto-shake reclaimed ~N tokens but context is still above the threshold;
+	 * trying the next preferred compaction method." is the engine falling back,
+	 * not failing — the terminal shows it as a warning and then carries on.
+	 */
+	test("a method fallback is a warning, not a failure", async () => {
+		const { transport, bridge } = await connected();
+		transport.frames({ type: "auto_compaction_start", reason: "threshold", action: "shake" });
+		transport.frames({
+			type: "auto_compaction_end",
+			action: "shake",
+			aborted: false,
+			willRetry: false,
+			skipped: false,
+			errorMessage:
+				"Auto-shake reclaimed ~4000 tokens but context is still above the threshold; trying the next preferred compaction method.",
+		});
+		await settle();
+
+		expect(bridge.getSnapshot().error).toBeNull();
+		expect(bridge.getSnapshot().warning).toContain("trying the next preferred");
+
+		bridge.clearWarning();
+		await settle();
+		expect(bridge.getSnapshot().warning).toBeNull();
+	});
+
+	/*
+	 * Eviction is routine — three live sessions and LRU — and it kills the very
+	 * process the compaction was running in. Nothing else will ever report back.
+	 */
+	/*
+	 * One refusal, one banner. `errorMessage` cannot distinguish "falling back"
+	 * from "failed", and a run this client started already gets a precise answer
+	 * from its own response — reporting both left an amber warning and a red
+	 * error on screen for the same "Already compacted".
+	 */
+	test("a manual failure is reported once, by its response", async () => {
+		const { transport, bridge } = await connected();
+		void bridge.startCompaction();
+		await settle();
+		transport.frames({
+			type: "auto_compaction_end",
+			action: "remote",
+			aborted: false,
+			willRetry: false,
+			errorMessage: "remote compaction failed",
+		});
+		transport.frames({
+			type: "response",
+			id: transport.idOf(0),
+			command: "compact",
+			success: false,
+			error: "remote compaction failed",
+		});
+		await settle();
+
+		expect(bridge.getSnapshot().warning).toBeNull();
+		expect(bridge.getSnapshot().error).toContain("remote compaction failed");
+	});
+
+	test("a suspended sidecar takes its compaction with it", async () => {
+		const { transport, bridge } = await connected();
+		void bridge.startCompaction();
+		await settle();
+		expect(bridge.getSnapshot().compaction).not.toBeNull();
+
+		transport.evict();
+		await settle();
+
+		expect(bridge.getSnapshot().compaction).toBeNull();
+	});
+
+	test("a failed compaction does not try to re-read anything", async () => {
+		const { transport, bridge } = await connected();
+		void bridge.startCompaction();
+		await settle();
+		const before = transport.sent.length;
+		transport.frames({
+			type: "response",
+			id: transport.idOf(0),
+			command: "compact",
+			success: false,
+			error: "remote compaction failed",
+		});
+		await settle();
+
+		const asked = transport.sent.slice(before).map(line => JSON.parse(line).type);
+		expect(asked).not.toContain("get_messages");
+		expect(bridge.getSnapshot().error).toContain("remote compaction failed");
+	});
+});
+
+describe("RpcBridge — plan mode", () => {
+	test("the toggle is a command, and the state is re-read after it", async () => {
+		const { transport, bridge } = await connected();
+		void bridge.setPlanMode(true);
+		await settle();
+
+		expect(transport.typeOf(0)).toBe("set_plan_mode");
+		expect(JSON.parse(transport.sent[0]).enabled).toBe(true);
+
+		transport.frames({ type: "response", id: transport.idOf(0), command: "set_plan_mode", success: true });
+		await settle();
+		expect(transport.sent.map(line => JSON.parse(line).type)).toContain("get_state");
+	});
+
+	/*
+	 * The terminal can move the mode too. A client that remembered what it last
+	 * asked for would go quietly wrong; this one re-reads on the event.
+	 */
+	test("someone else changing the mode refreshes the state", async () => {
+		const { transport } = await connected();
+		const before = transport.sent.length;
+
+		transport.frames({ type: "plan_mode_changed", enabled: true, planFilePath: "local://x-plan.md" });
+		await settle();
+
+		expect(transport.sent.slice(before).map(line => JSON.parse(line).type)).toContain("get_state");
+	});
+
+	test("a refusal is reported, not swallowed", async () => {
+		const { transport, bridge } = await connected();
+		void bridge.setPlanMode(true);
+		await settle();
+		transport.frames({
+			type: "response",
+			id: transport.idOf(0),
+			command: "set_plan_mode",
+			success: false,
+			error: "Plan mode is disabled. Enable it in settings (plan.enabled).",
+		});
+		await settle();
+
+		expect(bridge.getSnapshot().error).toContain("plan.enabled");
+	});
+});
+
+describe("RpcBridge — session state stays fresh", () => {
+	/*
+	 * The engine's only narration during a manual run: it emits these when a
+	 * method turns out to be unavailable and it falls back to the next one. Not
+	 * a failure — the run continues and usually succeeds.
+	 */
+	test("fallback narration is shown, not treated as failure", async () => {
+		const { transport, bridge } = await connected();
+		void bridge.startCompaction();
+		await settle();
+		transport.frames({
+			type: "notice",
+			level: "warning",
+			source: "compaction",
+			message: "remote compaction is unavailable for gpt-5.6-luna; trying the next preferred method",
+		});
+		await settle();
+
+		expect(bridge.getSnapshot().compaction?.note).toContain("trying the next preferred method");
+		expect(bridge.getSnapshot().error).toBeNull();
+	});
+
+	/*
+	 * `#state` has one writer, and it used to be woken by exactly two frame
+	 * types. Everything derived from it — the working indicator, the sidebar's
+	 * activity dot, the turn-finished notification, Escape-to-abort — was
+	 * reading a snapshot taken at boot.
+	 */
+	test("turn boundaries refresh the session state", async () => {
+		const { transport } = await connected();
+		const before = transport.sent.length;
+
+		transport.frames({ type: "turn_end" });
+		await settle();
+
+		const asked = transport.sent.slice(before).map(line => JSON.parse(line).type);
+		expect(asked).toContain("get_state");
+	});
+
+	/*
+	 * The trailing repeat matters: the reply to the `turn_start` ask was computed
+	 * before `turn_end` existed, so a plain in-flight skip would leave the client
+	 * believing the turn is still streaming.
+	 */
+	test("a burst collapses to one refresh plus one trailing repeat", async () => {
+		const { transport } = await connected();
+		const before = transport.sent.length;
+
+		transport.frames({ type: "turn_start" });
+		transport.frames({ type: "agent_start" });
+		transport.frames({ type: "turn_end" });
+		await settle();
+
+		const first = transport.sent.slice(before).filter(line => JSON.parse(line).type === "get_state");
+		expect(first).toHaveLength(1);
+
+		const index = transport.sent.findIndex(line => JSON.parse(line).type === "get_state");
+		transport.frames({
+			type: "response",
+			id: transport.idOf(index),
+			command: "get_state",
+			success: true,
+			data: { isStreaming: false, sessionId: "s" },
+		});
+		await settle();
+
+		expect(transport.sent.filter(line => JSON.parse(line).type === "get_state")).toHaveLength(2);
+	});
+
+	test("an unrelated event does not", async () => {
+		const { transport, bridge } = await connected();
+		const before = transport.sent.length;
+
+		transport.frames({ type: "message_update", message: { role: "assistant", content: [] } });
+		await settle();
+
+		expect(transport.sent.slice(before).map(line => JSON.parse(line).type)).not.toContain("get_state");
+		expect(bridge.getSnapshot()).toBeDefined();
 	});
 });

@@ -1,5 +1,5 @@
 import { memo, type ReactNode } from "react";
-import type { BridgeSnapshot, RpcBridge } from "../rpc/bridge";
+import type { BridgeSnapshot } from "../rpc/bridge";
 
 /**
  * The bottom line, laid out like a shell prompt: what you are working on at the
@@ -12,16 +12,20 @@ import type { BridgeSnapshot, RpcBridge } from "../rpc/bridge";
  */
 export const StatusBar = memo(function StatusBar({
 	snapshot,
-	bridge,
 	cwd,
 	cost,
+	onCompact,
 	children,
 }: {
 	snapshot: BridgeSnapshot;
-	bridge: RpcBridge;
 	/** Working directory of this session, shown like the TUI's prompt line. */
 	cwd?: string;
 	cost?: number;
+	/**
+	 * Asks to compact. Owned by the route rather than fired here, because the
+	 * confirmation and the progress banner both live outside this bar.
+	 */
+	onCompact(): void;
 	/** Interactive controls (model, approval mode) render at the head of the bar. */
 	children?: ReactNode;
 }) {
@@ -32,9 +36,24 @@ export const StatusBar = memo(function StatusBar({
 		<div className="omp-statusbar">
 			{children ?? <span>{state?.model?.id ?? (status === "starting" ? "starting…" : "no model")}</span>}
 
-			{state?.isStreaming && state.tokensPerSecond ? <span>{state.tokensPerSecond.toFixed(0)} tok/s</span> : null}
+			{/*
+			 * Context and its remedy sit next to the model and the approval mode,
+			 * because they are the same kind of thing: the state of this session
+			 * that you might act on. The path is not — it is where you are, so it
+			 * anchors the far end.
+			 */}
+			<ContextMeter usage={usage} cost={cost} />
 
-			{state?.isCompacting ? <span>compacting…</span> : null}
+			{/*
+			 * Disabled while one runs: the server refuses a second pass with
+			 * "Compaction already in progress", and a button that reports its own
+			 * refusal is worse than one that does not invite the click.
+			 */}
+			<button type="button" disabled={snapshot.compaction !== null} onClick={onCompact}>
+				{snapshot.compaction ? "compacting…" : "compact"}
+			</button>
+
+			{state?.isStreaming && state.tokensPerSecond ? <span>{state.tokensPerSecond.toFixed(0)} tok/s</span> : null}
 
 			{state && state.queuedMessageCount > 0 ? <span>{state.queuedMessageCount} queued</span> : null}
 
@@ -49,12 +68,6 @@ export const StatusBar = memo(function StatusBar({
 					{shortenPath(cwd)}
 				</span>
 			) : null}
-
-			<ContextMeter usage={usage} cost={cost} />
-
-			<button type="button" onClick={() => void bridge.compact().catch(() => {})}>
-				compact
-			</button>
 		</div>
 	);
 });

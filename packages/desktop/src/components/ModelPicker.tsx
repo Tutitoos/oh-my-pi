@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RpcBridge } from "../rpc/bridge";
 import type { RpcSessionState } from "../rpc/protocol";
-
-const THINKING_LEVELS = ["off", "low", "medium", "high"] as const;
+import { thinkingLevels } from "../rpc/thinking";
 
 /**
  * Model and thinking-level selector.
@@ -75,6 +74,8 @@ export function ModelPicker({ bridge, state }: { bridge: RpcBridge; state: RpcSe
 		[bridge],
 	);
 
+	const levels = thinkingLevels(state?.model);
+
 	const needle = query.trim().toLowerCase();
 	const visible = (models ?? []).filter(
 		model => !needle || `${model.provider}/${model.id}`.toLowerCase().includes(needle),
@@ -97,20 +98,26 @@ export function ModelPicker({ bridge, state }: { bridge: RpcBridge; state: RpcSe
 				<div className="omp-picker__menu">
 					<div className="omp-picker__section">
 						<span className="omp-picker__label">Thinking</span>
-						<div className="omp-picker__levels">
-							{THINKING_LEVELS.map(level => (
-								<button
-									key={level}
-									type="button"
-									className="omp-picker__level"
-									aria-pressed={state?.thinkingLevel === level}
-									disabled={busy}
-									onClick={() => void setThinking(level)}
-								>
-									{level}
-								</button>
-							))}
-						</div>
+						{levels.length > 0 ? (
+							<div className="omp-picker__levels">
+								{levels.map(level => (
+									<button
+										key={level}
+										type="button"
+										className="omp-picker__level"
+										aria-pressed={state?.thinkingLevel === level}
+										disabled={busy}
+										onClick={() => void setThinking(level)}
+									>
+										{level}
+									</button>
+								))}
+							</div>
+						) : (
+							<p className="omp-picker__note">
+								{state?.model ? "This model does not reason." : "Waiting for the session's model."}
+							</p>
+						)}
 					</div>
 
 					<input
