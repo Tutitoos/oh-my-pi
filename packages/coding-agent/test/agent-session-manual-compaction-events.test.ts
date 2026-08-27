@@ -171,6 +171,26 @@ describe("AgentSession manual compaction lifecycle events", () => {
 	 * makes the resolver skip snapcompact for soft, and that must still read as
 	 * one compaction — not as one that started and never finished, nor as two.
 	 */
+	it("every method failing still closes the bracket", async () => {
+		/*
+		 * The fallback runs inside the `catch` that handles the first method's
+		 * failure, and a throw from inside a `catch` escapes it — so both closes
+		 * were skipped and a client watching for the pair kept its banner up
+		 * forever. This is the one shape that produced a start with no end.
+		 */
+		const harness = await createHarness(["soft", "remote"]);
+		vi.spyOn(compactionModule, "compact").mockImplementation(async () => {
+			throw new Error("every method fails");
+		});
+
+		await harness.session.compact().catch(() => {});
+
+		const types = harness.events.map(event => event.type);
+		expect(types.filter(type => type === "auto_compaction_start")).toHaveLength(1);
+		expect(types.filter(type => type === "auto_compaction_end")).toHaveLength(1);
+		expect(types.at(-1)).toBe("auto_compaction_end");
+	});
+
 	it("a method the resolver skips still yields exactly one bracket", async () => {
 		const harness = await createHarness(["snapcompact", "soft"]);
 		vi.spyOn(compactionModule, "compact").mockImplementation(async preparation => ({

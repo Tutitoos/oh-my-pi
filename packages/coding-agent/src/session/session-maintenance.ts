@@ -347,6 +347,13 @@ export class SessionMaintenance {
 	#compactionAbortController: AbortController | undefined;
 	/** Resolves after an active manual compaction has reconnected the agent subscription. */
 	#manualCompactionCleanup: Promise<void> | undefined;
+	/**
+	 * The compaction method that last completed, for the frame that has to report
+	 * it. A fallback runs as a nested call that owns no controller and therefore
+	 * emits nothing, so its caller — which only knows the method that failed —
+	 * reads the answer from here. `CompactionResult` does not carry it.
+	 */
+	#lastCompletedMethod: CompactionMethod | undefined;
 	#autoCompactionAbortController: AbortController | undefined;
 	/**
 	 * Live tool-loop contexts parked after mid-turn maintenance hit a no-progress
@@ -736,6 +743,9 @@ export class SessionMaintenance {
 		let selectedMethod: CompactionMethod | undefined;
 		/** Whether this call emitted a start it still owes an end. */
 		let manualLifecycleOpen = false;
+		// Cleared per owning call, so a previous compaction's method cannot be
+		// reported as this one's.
+		if (ownsCompactionController) this.#lastCompletedMethod = undefined;
 		let compactionCommitted = false;
 		let methodAttempted = false;
 		const compactionAbortController = retryController ?? new AbortController();
@@ -1076,6 +1086,14 @@ export class SessionMaintenance {
 				preserveData: snapcompact.stripPreservedArchive(preserveData),
 			};
 			options?.onComplete?.(compactionResult);
+			/*
+			 * Which method actually did the work, for whoever has to report it.
+			 * A fallback runs as a nested call that does not own the controller, so
+			 * it emits nothing — and its caller only knows the method that *failed*.
+			 * `CompactionResult` carries no method, so the completing frame records
+			 * it here and the caller reads it back.
+			 */
+			this.#lastCompletedMethod = selectedMethod;
 			if (manualLifecycleOpen) {
 				manualLifecycleOpen = false;
 				await this.#emitLifecycleEvent(
@@ -1115,18 +1133,47 @@ export class SessionMaintenance {
 				 * closing it here a compaction that succeeded on the second method
 				 * would look, to a listener, like one that never finished.
 				 */
-				const fallbackResult = await this.compact(
-					customInstructions,
-					options,
-					selectedMethodIndex + 1,
-					compactionAbortController,
-				);
+				let fallbackResult: CompactionResult;
+				try {
+					fallbackResult = await this.compact(
+						customInstructions,
+						options,
+						selectedMethodIndex + 1,
+						compactionAbortController,
+					);
+				} catch (fallbackError) {
+					/*
+					 * A throw from inside a `catch` escapes that `catch`, so the close
+					 * below — and the one at the end of this handler — were both skipped:
+					 * every method failing left a start with no end, and a client
+					 * watching for the pair kept its banner up forever.
+					 */
+					if (manualLifecycleOpen) {
+						manualLifecycleOpen = false;
+						await this.#emitLifecycleEvent(
+							{
+								type: "auto_compaction_end",
+								action: this.#lastCompletedMethod ?? selectedMethod ?? "context-full",
+								reason: "manual",
+								result: undefined,
+								aborted:
+									fallbackError instanceof CompactionCancelledError ||
+									compactionAbortController.signal.aborted,
+								willRetry: false,
+								errorMessage: fallbackError instanceof Error ? fallbackError.message : String(fallbackError),
+							},
+							false,
+						);
+					}
+					throw fallbackError;
+				}
 				if (manualLifecycleOpen) {
 					manualLifecycleOpen = false;
 					await this.#emitLifecycleEvent(
 						{
 							type: "auto_compaction_end",
-							action: selectedMethod ?? "context-full",
+							// The method that ran, not the one that failed on the way here.
+							action: this.#lastCompletedMethod ?? selectedMethod ?? "context-full",
 							reason: "manual",
 							result: fallbackResult,
 							tokensAfter: this.#host.getContextUsage()?.tokens,

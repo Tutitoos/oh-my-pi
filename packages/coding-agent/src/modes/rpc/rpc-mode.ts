@@ -1103,9 +1103,19 @@ export async function runRpcMode(
 		);
 
 		if (choice !== APPROVE_OPTION) {
-			// Refine, or a dismissal. Plan mode stays on for another planning turn;
-			// promote the reviewed path so the next turn targets the plan just seen.
-			if (state.planFilePath !== planFilePath) session.setPlanModeState({ ...state, planFilePath });
+			/*
+			 * Refine, or a dismissal. Plan mode stays on for another planning turn;
+			 * promote the reviewed path so the next turn targets the plan just seen.
+			 *
+			 * Re-read rather than write back the copy captured at entry: a review
+			 * blocks on a person, and plan mode can be turned off from anywhere
+			 * while the dialog is up — spreading the stale copy would carry
+			 * `enabled: true` back in and silently switch it on again.
+			 */
+			const current = session.getPlanModeState();
+			if (current?.enabled && current.planFilePath !== planFilePath) {
+				session.setPlanModeState({ ...current, planFilePath });
+			}
 			return {
 				content: [
 					{
@@ -1546,7 +1556,22 @@ export async function runRpcMode(
 					handleRpcPlanProposal("")
 						.then(() => {})
 						.catch(err => {
-							output(error(undefined, "plan_review", err instanceof Error ? err.message : String(err)));
+							/*
+							 * A notice, not a response frame.
+							 *
+							 * This command answers `success` immediately — it has to, or the
+							 * serial queue is held for as long as a person takes to read a
+							 * plan. So by the time this fires the request is settled, and a
+							 * second frame carrying its id matches nothing a client is
+							 * waiting on. It went out with `id: undefined` before, which
+							 * matched even less. Notices are the channel for exactly this:
+							 * out-of-band conditions the user should see.
+							 */
+							session.emitNotice(
+								"error",
+								`Plan review failed: ${err instanceof Error ? err.message : String(err)}`,
+								"plan",
+							);
 						}),
 				);
 				return success(id, "plan_review");
