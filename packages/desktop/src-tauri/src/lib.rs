@@ -14,14 +14,14 @@
 //! room, and one spare is kept pre-warmed so opening a tab is instant instead
 //! of a four-second stall.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tauri::async_runtime::Receiver;
 use tauri::ipc::Channel;
-use tauri::{AppHandle, Manager, RunEvent, State, WindowEvent};
+use tauri::{AppHandle, DragDropEvent, Manager, RunEvent, State, WindowEvent};
 use tauri_plugin_shell::ShellExt;
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 
@@ -629,6 +629,21 @@ async fn omp_cli(app: AppHandle, args: Vec<String>) -> Result<String, String> {
 	Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
+/// How many dropped paths to remember before starting over. Far above any real
+/// session; it exists so a long-lived window cannot grow the set forever.
+const MAX_REMEMBERED_DROPS: usize = 512;
+
+/// Paths the user actually dropped on the window.
+///
+/// `read_dropped_image` is reachable from the webview like any other command, so
+/// without this it is a "read me any image on this disk" primitive for whatever
+/// happens to be running in there. Rust sees the real drop event, so Rust is the
+/// only side that can tell an image the user handed us from one a script asked
+/// for. Entries are canonicalised, because the webview is told the path by Tauri
+/// and could hand back a different spelling of the same file.
+#[derive(Default)]
+struct Dropped(Mutex<HashSet<std::path::PathBuf>>);
+
 /// Where omp keeps its sessions. Every path this process is asked to delete has
 /// to live under here.
 fn sessions_root() -> Option<std::path::PathBuf> {
@@ -772,8 +787,18 @@ fn image_mime(path: &std::path::Path) -> Option<&'static str> {
 /// agent resolves on its own side, so this command never needs to be a general
 /// "read any file the webview asks for" hole.
 #[tauri::command]
-fn read_dropped_image(path: String) -> Result<DroppedImage, String> {
+fn read_dropped_image(dropped: State<'_, Dropped>, path: String) -> Result<DroppedImage, String> {
 	let path = std::path::Path::new(&path);
+	// Only a file the user dropped. See `Dropped`.
+	let canonical = path.canonicalize().map_err(|err| err.to_string())?;
+	let known = dropped
+		.0
+		.lock()
+		.map_err(|_| "dropped-paths mutex poisoned")?
+		.contains(&canonical);
+	if !known {
+		return Err("that file was not dropped on this window".into());
+	}
 	let mime = image_mime(path).ok_or_else(|| "not an image".to_string())?;
 
 	let meta = std::fs::metadata(path).map_err(|err| err.to_string())?;
@@ -862,6 +887,7 @@ pub fn run() {
 		.plugin(tauri_plugin_opener::init())
 		.plugin(tauri_plugin_clipboard_manager::init())
 		.manage(Sessions::default())
+		.manage(Dropped::default())
 		.invoke_handler(tauri::generate_handler![
 			agent_start,
 			agent_send,
@@ -881,6 +907,22 @@ pub fn run() {
 			// Scoped by label so a future secondary window does not nuke every tab.
 			if matches!(event, WindowEvent::Destroyed) && window.label() == "main" {
 				kill_all(window.app_handle());
+			}
+			// Remember what was dropped, so `read_dropped_image` can refuse
+			// everything else.
+			//
+			// Accumulating rather than replacing: the webview reads a drop
+			// asynchronously, and two batches dropped in quick succession would
+			// otherwise race — the second drop would invalidate the first before
+			// its images had been read. Bounded by clearing wholesale once the set
+			// is implausibly large, which no real session reaches.
+			if let WindowEvent::DragDrop(DragDropEvent::Drop { paths, .. }) = event {
+				if let Ok(state) = window.app_handle().state::<Dropped>().0.lock().as_mut() {
+					if state.len() > MAX_REMEMBERED_DROPS {
+						state.clear();
+					}
+					state.extend(paths.iter().filter_map(|path| path.canonicalize().ok()));
+				}
 			}
 		})
 		.build(tauri::generate_context!())

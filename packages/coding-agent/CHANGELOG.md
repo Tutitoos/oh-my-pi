@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Added
+
+- Plan mode is now controllable over the `rpc-ui` protocol: `set_plan_mode` and `plan_review` commands, a `planMode` field in the session state, and a `plan_mode_changed` event, so a non-terminal client can enter, leave and follow it.
+- Approving a plan over RPC now sends the plan's markdown with the request, so a client can show what it is asking you to approve.
+- `abort_compact` cancels a compaction without aborting the turn, and closing stdin cancels one in flight.
+- Manual compaction now reports itself the same way automatic compaction does, and the end of a pass carries the token count after the rewrite.
+- Compaction refusals carry a machine-readable code, so clients no longer match on English prose.
+
+### Changed
+
+- `compact` is dispatched in the background like `bash`, so `abort` and `get_state` keep answering while a compaction runs.
+
 ## [18.0.7] - 2026-08-26
 
 ### Added
