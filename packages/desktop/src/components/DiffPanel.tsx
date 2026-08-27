@@ -1,3 +1,4 @@
+import { openPath } from "@tauri-apps/plugin-opener";
 import { memo, type MouseEvent as ReactMouseEvent, useCallback, useEffect, useRef, useState } from "react";
 import type { RpcBridge } from "../rpc/bridge";
 import { writeClipboard } from "../shell/clipboard";
@@ -94,7 +95,6 @@ export function DiffPanel({ bridge, ready, streaming }: { bridge: RpcBridge; rea
 	const openInEditor = useCallback(
 		async (path: string) => {
 			if (!root) return;
-			const { openPath } = await import("@tauri-apps/plugin-opener");
 			try {
 				await openPath(absolute(root, path));
 			} catch (cause) {

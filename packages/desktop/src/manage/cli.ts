@@ -1,3 +1,5 @@
+import { invoke } from "@tauri-apps/api/core";
+import { isTauri } from "../rpc/transport";
 /**
  * Short-lived `omp <args…>` invocations.
  *
@@ -12,11 +14,9 @@ export async function ompCli(args: string[]): Promise<string> {
 	// Outside a Tauri webview `invoke` is undefined, and the resulting
 	// "Cannot read properties of undefined" tells nobody anything. The frontend
 	// is routinely opened in a plain browser during development.
-	const { isTauri } = await import("../rpc/transport");
 	if (!isTauri()) {
 		throw new Error(`Not running inside omp Desktop — \`omp ${args.join(" ")}\` needs the Tauri shell.`);
 	}
-	const { invoke } = await import("@tauri-apps/api/core");
 	return invoke<string>("omp_cli", { args });
 }
 

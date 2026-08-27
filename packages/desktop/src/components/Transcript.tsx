@@ -15,9 +15,12 @@ import { codeBlockAt, selectionWithin, transcriptMenuItems } from "./transcriptM
 export const Transcript = memo(function Transcript({
 	entries,
 	streaming,
+	onError,
 }: {
 	entries: readonly TranscriptEntry[];
 	streaming?: boolean;
+	/** Where a copy that failed goes, instead of nowhere. */
+	onError(cause: unknown): void;
 }) {
 	const scroller = useRef<HTMLDivElement>(null);
 	const pinned = useRef(true);
@@ -100,12 +103,12 @@ export const Transcript = memo(function Transcript({
 				if (entry.kind === "tool") {
 					return (
 						<div className="omp-entry omp-entry--tool" key={entry.id}>
-							<ToolCard entry={entry} />
+							<ToolCard entry={entry} onError={onError} />
 						</div>
 					);
 				}
 				if (entry.kind === "compaction") return <CompactionRule key={entry.id} entry={entry} />;
-				return <MessageBubble key={entry.id} entry={entry} />;
+				return <MessageBubble key={entry.id} entry={entry} onError={onError} />;
 			})}
 
 			{awaitingOutput ? <WorkingIndicator /> : null}
@@ -163,7 +166,13 @@ function WorkingIndicator() {
 	);
 }
 
-const MessageBubble = memo(function MessageBubble({ entry }: { entry: Extract<TranscriptEntry, { kind: "message" }> }) {
+const MessageBubble = memo(function MessageBubble({
+	entry,
+	onError,
+}: {
+	entry: Extract<TranscriptEntry, { kind: "message" }>;
+	onError(cause: unknown): void;
+}) {
 	const { open: openMenu } = useContextMenu();
 	const thinking = thinkingText(entry.content);
 	const text = messageText(entry.content);
@@ -187,7 +196,7 @@ const MessageBubble = memo(function MessageBubble({ entry }: { entry: Extract<Tr
 								text,
 								selection: selectionWithin(event.currentTarget),
 								codeBlock: codeBlockAt(event.target),
-								report: () => {},
+								report: onError,
 							}),
 						);
 					}}

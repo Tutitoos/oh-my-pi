@@ -134,8 +134,23 @@ export function ContextMenu() {
 				className="omp-menu__sheet"
 				onClick={close}
 				onContextMenu={event => {
+					/*
+					 * Re-target rather than merely dismiss. The sheet covers the window,
+					 * so the row you actually right-clicked never sees the event and
+					 * `preventDefault` stops the window fallback too — the menu just
+					 * closed and you had to click again. Close, then replay the click
+					 * at whatever was underneath once the sheet is gone.
+					 */
 					event.preventDefault();
+					const { clientX, clientY } = event;
 					close();
+					requestAnimationFrame(() => {
+						document
+							.elementFromPoint(clientX, clientY)
+							?.dispatchEvent(
+								new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX, clientY }),
+							);
+					});
 				}}
 			/>
 			<div
@@ -143,6 +158,10 @@ export function ContextMenu() {
 				ref={ref}
 				role="menu"
 				aria-label="Context menu"
+				// The menu is a sibling of the sheet, not a child, so a right-click on
+				// one of its own rows reaches the window fallback and swapped this
+				// menu for the shell one. Claim it and do nothing.
+				onContextMenu={event => event.preventDefault()}
 				style={{ left: at?.x ?? request.x, top: at?.y ?? request.y, visibility: at ? "visible" : "hidden" }}
 			>
 				{items.map((item, index) =>

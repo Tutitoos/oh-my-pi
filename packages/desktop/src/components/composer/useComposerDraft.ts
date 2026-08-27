@@ -1,4 +1,14 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import {
+	type Dispatch,
+	type RefObject,
+	type SetStateAction,
+	useCallback,
+	useEffect,
+	useId,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import type { RpcBridge } from "../../rpc/bridge";
 import type { AvailableSlashCommand } from "../../rpc/protocol";
 import { readDroppedImage } from "../../rpc/transport";
@@ -20,7 +30,43 @@ export interface Attachment {
  */
 let attachmentSeq = 0;
 
-export type ComposerDraft = ReturnType<typeof useComposerDraft>;
+/**
+ * Everything the composer's two surfaces share.
+ *
+ * Written out rather than inferred from the hook: the draft is owned in one
+ * place and read by the inline row, the expanded dialog and the chips, so what
+ * passes between them is a contract worth being able to read.
+ */
+export interface ComposerDraft {
+	draft: string;
+	changeDraft(value: string): void;
+	attachments: Attachment[];
+	references: string[];
+	notice: string | null;
+	dismissNotice(): void;
+	dropping: boolean;
+	setDropping: Dispatch<SetStateAction<boolean>>;
+	expanded: boolean;
+	setExpanded: Dispatch<SetStateAction<boolean>>;
+	/** Slash commands matching the draft, or empty when the menu is closed. */
+	matches: AvailableSlashCommand[];
+	slashListId: string;
+	highlight: number;
+	setHighlight: Dispatch<SetStateAction<number>>;
+	dismissSlash(): void;
+	applyCompletion(command: AvailableSlashCommand): void;
+	addImages(files: readonly File[]): Promise<void>;
+	addDroppedPaths(paths: readonly string[]): Promise<void>;
+	addReferences(paths: readonly string[]): void;
+	removeAttachment(id: string): void;
+	removeReference(path: string): void;
+	submit(): Promise<void>;
+	streaming: boolean;
+	editorRef: RefObject<HTMLTextAreaElement | null>;
+	/** Where the caret was, so it survives the move between surfaces. */
+	selection: RefObject<{ start: number; end: number }>;
+	pendingCaret: RefObject<number | null>;
+}
 
 /**
  * Everything the composer knows, owned in one place.
@@ -42,7 +88,7 @@ export function useComposerDraft({
 	bridge: RpcBridge;
 	commands: readonly AvailableSlashCommand[];
 	streaming: boolean;
-}) {
+}): ComposerDraft {
 	const [draft, setDraft] = useState("");
 	const [attachments, setAttachments] = useState<Attachment[]>([]);
 	/**

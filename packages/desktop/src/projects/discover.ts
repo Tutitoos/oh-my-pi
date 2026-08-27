@@ -9,6 +9,7 @@
  * parent repo instead of appearing as a separate project.
  */
 
+import { invoke } from "@tauri-apps/api/core";
 import type { SessionInfo } from "../rpc/protocol";
 
 export interface SessionNode extends SessionInfo {
@@ -40,7 +41,6 @@ export interface ProjectNode {
 export const UNGROUPED = "(no project)";
 
 export async function loadSessions(): Promise<SessionNode[]> {
-	const { invoke } = await import("@tauri-apps/api/core");
 	const raw = await invoke<string>("omp_cli", { args: ["sessions", "--json"] });
 	const parsed = JSON.parse(raw) as SessionNode[];
 	return Array.isArray(parsed) ? parsed.filter(isWorthListing) : [];

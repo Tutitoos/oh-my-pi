@@ -1,3 +1,5 @@
+import { Channel, invoke } from "@tauri-apps/api/core";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 /**
  * Transport seam between `RpcBridge` and the Rust relay.
  *
@@ -49,7 +51,6 @@ export interface Transport {
  */
 export class TauriTransport implements Transport {
 	async start(tabId: string, onEvent: (event: RelayEvent) => void, cwd?: string): Promise<AgentHandle> {
-		const { Channel, invoke } = await import("@tauri-apps/api/core");
 		const channel = new Channel<RelayEvent>();
 		channel.onmessage = onEvent;
 		// Rust names the arguments `on_event` / `cwd`; Tauri camelCases across IPC.
@@ -57,22 +58,18 @@ export class TauriTransport implements Transport {
 	}
 
 	async send(tabId: string, line: string): Promise<void> {
-		const { invoke } = await import("@tauri-apps/api/core");
 		await invoke("agent_send", { tabId, line });
 	}
 
 	async suspend(tabId: string): Promise<void> {
-		const { invoke } = await import("@tauri-apps/api/core");
 		await invoke("agent_suspend", { tabId });
 	}
 
 	async kill(tabId: string): Promise<void> {
-		const { invoke } = await import("@tauri-apps/api/core");
 		await invoke("agent_kill", { tabId });
 	}
 
 	async poolStatus(): Promise<PoolStatus> {
-		const { invoke } = await import("@tauri-apps/api/core");
 		return invoke<PoolStatus>("agent_pool_status");
 	}
 }
@@ -92,7 +89,6 @@ export interface DroppedImage {
  * nothing in the packaged app. Rust reads it instead, images only.
  */
 export async function readDroppedImage(path: string): Promise<DroppedImage> {
-	const { invoke } = await import("@tauri-apps/api/core");
 	return invoke<DroppedImage>("read_dropped_image", { path });
 }
 
@@ -140,7 +136,6 @@ export async function onWindowDrop(handler: {
 	leave(): void;
 	drop(paths: readonly string[]): void;
 }): Promise<() => void> {
-	const { getCurrentWebview } = await import("@tauri-apps/api/webview");
 	// One subscription, four listeners underneath: Tauri's combined stop calls
 	// all four bare, so one stale id takes the other three down with it.
 	const stop = await getCurrentWebview().onDragDropEvent(event => {

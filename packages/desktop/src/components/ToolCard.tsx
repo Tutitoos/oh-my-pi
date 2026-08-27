@@ -13,19 +13,18 @@ import { toolMenuItems } from "./toolMenu";
  * declared host-agnostic — plain JSON in, tolerant of malformed args — so no
  * translation is needed beyond naming.
  */
-export const ToolCard = memo(function ToolCard({ entry }: { entry: ToolEntry }) {
+export const ToolCard = memo(function ToolCard({
+	entry,
+	onError,
+}: {
+	entry: ToolEntry;
+	onError(cause: unknown): void;
+}) {
 	const { open: openMenu } = useContextMenu();
 	return (
 		// A wrapper, because `ToolView` is the shared renderer and does not take a
 		// context-menu handler — and should not learn about one host's menus.
-		<div
-			onContextMenu={event =>
-				openMenu(
-					event,
-					toolMenuItems(entry, () => {}),
-				)
-			}
-		>
+		<div onContextMenu={event => openMenu(event, toolMenuItems(entry, onError))}>
 			<ToolView
 				name={entry.name}
 				args={entry.args}

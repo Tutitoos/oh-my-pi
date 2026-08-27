@@ -1,3 +1,4 @@
+import { open } from "@tauri-apps/plugin-dialog";
 import { isTauri } from "../rpc/transport";
 
 /**
@@ -11,7 +12,6 @@ import { isTauri } from "../rpc/transport";
  */
 export async function pickDirectory(title: string): Promise<string | undefined> {
 	if (!isTauri()) return undefined;
-	const { open } = await import("@tauri-apps/plugin-dialog");
 	const selected = await open({ directory: true, multiple: false, title });
 	const directory = Array.isArray(selected) ? selected[0] : selected;
 	return typeof directory === "string" && directory ? directory : undefined;

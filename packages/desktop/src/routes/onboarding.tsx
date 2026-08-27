@@ -1,3 +1,4 @@
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import type { LoginProvider } from "../rpc/protocol";
@@ -23,7 +24,6 @@ export function OnboardingRoute() {
 	const { bridge, snapshot } = useBridge("scratch", {
 		onOpenUrl: async (url, _instructions, launchUrl) => {
 			setOpened(launchUrl ?? url);
-			const { openUrl } = await import("@tauri-apps/plugin-opener");
 			await openUrl(url).catch(() => {});
 		},
 	});

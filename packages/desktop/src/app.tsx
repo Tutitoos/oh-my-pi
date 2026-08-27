@@ -7,7 +7,7 @@ import { ResizeHandle } from "./components/ResizeHandle";
 import { Sidebar } from "./components/Sidebar";
 import { TitleBar } from "./components/TitleBar";
 import { adoptSessionIn, findOpenTab, type SessionNode } from "./projects/discover";
-import { anyTabBusy, busyTabs, markViewed } from "./shell/activity";
+import { anyTabBusy, busyTabs, forgetTab, markViewed } from "./shell/activity";
 import type { MenuItem } from "./shell/contextMenu";
 import { newChatId } from "./shell/ids";
 import { useCloseGuard } from "./shell/useCloseGuard";
@@ -73,10 +73,18 @@ export function App() {
 
 	const activeTab = tabs.find(tab => tab.tabId === activeTabId) ?? tabs[0];
 
-	const activate = useCallback((tabId: string) => {
-		setActiveTabId(tabId);
-		markViewed(tabId); // clears the unread "finished" mark
-	}, []);
+	const activate = useCallback(
+		(tabId: string) => {
+			setActiveTabId(tabId);
+			markViewed(tabId); // clears the unread "finished" mark
+			// The sidebar is visible from every route, so activating a tab has to
+			// bring the session view back the way `openTab` does. Without this,
+			// clicking a chat while Settings was open changed which tab was active
+			// and left you looking at Settings.
+			void navigate("/");
+		},
+		[navigate],
+	);
 
 	const openTab = useCallback(
 		(tab: OpenTab) => {
@@ -84,10 +92,10 @@ export function App() {
 			// process rather than spawning a second one, and opening a new session
 			// never closes the one you were in.
 			setTabs(current => (current.some(t => t.tabId === tab.tabId) ? current : [...current, tab]));
+			// `activate` navigates; opening and re-activating take the same road.
 			activate(tab.tabId);
-			void navigate("/");
 		},
-		[activate, navigate],
+		[activate],
 	);
 
 	/*
@@ -124,6 +132,18 @@ export function App() {
 	 * that changed nothing would re-render every tab and, worse, hand `tabs` a new
 	 * identity on each frame.
 	 */
+	/*
+	 * Forget a tab entirely. The only caller is deleting its session: the tab
+	 * would otherwise stay open with no file behind it, and the next sidebar
+	 * refresh would list it again as an unsaved chat — the row you just deleted,
+	 * back under a different name.
+	 */
+	const closeTab = useCallback((tabId: string) => {
+		setTabs(current => current.filter(tab => tab.tabId !== tabId));
+		setActiveTabId(current => (current === tabId ? SCRATCH.tabId : current));
+		forgetTab(tabId);
+	}, []);
+
 	const adoptSession = useCallback((tabId: string, sessionId: string) => {
 		setTabs(current => adoptSessionIn(current, tabId, sessionId) as OpenTab[]);
 	}, []);
@@ -292,6 +312,7 @@ export function App() {
 						onActivateTab={activate}
 						onNewChatHere={startSession}
 						onNewSession={() => setPickingProject(true)}
+						onCloseTab={closeTab}
 					/>
 				) : null}
 

@@ -1,3 +1,6 @@
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
+
 /**
  * Native notifications for the two moments worth interrupting someone.
  *
@@ -14,7 +17,6 @@ async function ensurePermission(): Promise<boolean> {
 	if (permission === "granted") return true;
 	if (permission === "denied") return false;
 
-	const { isPermissionGranted, requestPermission } = await import("@tauri-apps/plugin-notification");
 	const granted = (await isPermissionGranted()) || (await requestPermission()) === "granted";
 	permission = granted ? "granted" : "denied";
 	return granted;
@@ -22,7 +24,6 @@ async function ensurePermission(): Promise<boolean> {
 
 async function windowFocused(): Promise<boolean> {
 	try {
-		const { getCurrentWindow } = await import("@tauri-apps/api/window");
 		return await getCurrentWindow().isFocused();
 	} catch {
 		return true; // no window: assume focused and stay quiet
@@ -33,7 +34,6 @@ export async function notify(title: string, body: string): Promise<void> {
 	try {
 		if (await windowFocused()) return;
 		if (!(await ensurePermission())) return;
-		const { sendNotification } = await import("@tauri-apps/plugin-notification");
 		sendNotification({ title, body });
 	} catch {
 		// A missing notification is never worth surfacing as an error.

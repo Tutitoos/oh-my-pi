@@ -21,13 +21,23 @@ export function ComposerEditor({
 }) {
 	const { draft, changeDraft, matches, editorRef, selection, pendingCaret } = composer;
 
-	// Take focus and put the caret back where it was, in both directions.
+	/*
+	 * Take focus and put the caret back where it was, in both directions.
+	 *
+	 * Keyed on `variant` and `disabled`, not on the refs. Refs never change
+	 * identity, so this ran exactly once — during the first commit, while the
+	 * session was still booting and the textarea was `disabled`. `focus()` on a
+	 * disabled element does nothing, and nothing ever tried again: the composer
+	 * came up unfocused and stayed that way until you clicked it. `variant` is
+	 * what carries the other half, the move between the inline row and the
+	 * expanded dialog.
+	 */
 	useLayoutEffect(() => {
 		const node = editorRef.current;
-		if (!node) return;
+		if (!node || disabled) return;
 		node.focus();
 		node.setSelectionRange(selection.current.start, selection.current.end);
-	}, [editorRef, selection]);
+	}, [editorRef, selection, variant, disabled]);
 
 	/**
 	 * Grow to fit the draft — inline only. In the modal the box is already as

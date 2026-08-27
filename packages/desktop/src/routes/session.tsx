@@ -1,3 +1,4 @@
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { useEffect, useRef, useState } from "react";
 import { useOutletContext } from "react-router";
 import type { OpenTab, ShellContext } from "../app";
@@ -70,7 +71,6 @@ function SessionView({
 		sessionPath: tab.sessionPath,
 		cwd: tab.cwd,
 		onOpenUrl: async url => {
-			const { openUrl } = await import("@tauri-apps/plugin-opener");
 			await openUrl(url);
 		},
 	});
@@ -357,7 +357,11 @@ function SessionView({
 						</div>
 					</div>
 				) : (
-					<Transcript entries={snapshot.transcript} streaming={streaming} />
+					<Transcript
+						entries={snapshot.transcript}
+						streaming={streaming}
+						onError={cause => bridge.reportError(cause)}
+					/>
 				)}
 
 				<div>

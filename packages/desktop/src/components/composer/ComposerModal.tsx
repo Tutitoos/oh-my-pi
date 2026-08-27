@@ -1,3 +1,4 @@
+import { open } from "@tauri-apps/plugin-dialog";
 import { useCallback, useEffect, useRef } from "react";
 import { isTauri } from "../../rpc/transport";
 import { ComposerChips, ComposerSlash } from "./ComposerChips";
@@ -52,7 +53,6 @@ export function ComposerModal({ composer }: { composer: ComposerDraft }) {
 
 	const pickFiles = useCallback(async () => {
 		if (!isTauri()) return;
-		const { open } = await import("@tauri-apps/plugin-dialog");
 		const picked = await open({ multiple: true, title: "Reference files" });
 		const paths = Array.isArray(picked) ? picked : picked ? [picked] : [];
 		composer.addReferences(paths.filter((path): path is string => typeof path === "string"));

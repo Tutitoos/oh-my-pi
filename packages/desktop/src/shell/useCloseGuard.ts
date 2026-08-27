@@ -9,6 +9,7 @@
  * `preventDefault`, and the decision needs UI anyway.
  */
 
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect } from "react";
 import { unlistenOnce } from "../rpc/transport";
 
@@ -19,7 +20,6 @@ export function useCloseGuard(isBusy: () => boolean, confirm: () => Promise<bool
 
 		void (async () => {
 			try {
-				const { getCurrentWindow } = await import("@tauri-apps/api/window");
 				const appWindow = getCurrentWindow();
 				// Idempotent: Tauri's own unlisten throws on a second call and does it
 				// as an unhandled rejection, which would take the window down.

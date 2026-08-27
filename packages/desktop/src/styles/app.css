@@ -1229,7 +1229,8 @@ body {
 .omp-picker__label {
 	display: block;
 	margin-bottom: 4px;
-	color: var(--text-weaker);
+		/* Measured on this ground: `--text-weaker` is 2.55:1 and `--text-weak` 4.08:1. */
+	color: var(--text-base);
 	font-size: var(--font-size-small);
 }
 
@@ -2831,7 +2832,20 @@ body {
 .omp-composer__stand-in {
 	border-left-color: var(--tui-accent);
 	background: var(--tui-card-bg);
+}
+
+.omp-composer__input {
 	color: var(--tui-text);
+}
+
+/*
+ * The stand-in is the placeholder left behind while the real editor is in the
+ * expanded dialog, and it is dimmed on purpose so it does not read as a second
+ * live field. Sharing the rule above handed it full-strength text and undid
+ * that.
+ */
+.omp-composer__stand-in {
+	color: var(--tui-muted);
 }
 
 .omp-composer__input:focus {
@@ -3315,7 +3329,8 @@ body {
 .omp-option__key {
 	flex: 0 0 auto;
 	width: 1.5ch;
-	color: var(--text-weaker);
+		/* Measured on this ground: `--text-weaker` is 2.55:1 and `--text-weak` 4.08:1. */
+	color: var(--text-base);
 	font-size: var(--font-size-small);
 	text-align: right;
 }
@@ -3394,7 +3409,8 @@ body {
 	flex: 0 0 auto;
 	margin: 0;
 	padding: 8px 20px 0;
-	color: var(--text-weaker);
+		/* Measured on this ground: `--text-weaker` is 2.55:1 and `--text-weak` 4.08:1. */
+	color: var(--text-base);
 	font-size: var(--font-size-small);
 }
 
@@ -3424,6 +3440,16 @@ body {
  * the theme file, opposite direction.
  */
 .omp-modal {
+	/*
+	 * The expanded composer moves the live editor in here, and its rules resolve
+	 * these three. Outside `.omp-main` they are undefined, so the declarations
+	 * were invalid at computed-value time: the 2px accent bar came out white
+	 * instead of cyan and the text picked up opencode's near-white.
+	 */
+	--tui-accent: var(--text-interactive-base);
+	--tui-text: var(--text-strong);
+	--tui-card-bg: var(--background-base);
+
 	--tui-md-heading: var(--text-strong);
 	--tui-md-link: var(--text-interactive-base);
 	--tui-md-list-bullet: var(--text-interactive-base);
@@ -3434,7 +3460,6 @@ body {
 	--tui-md-quote-border: var(--border-base);
 	--tui-md-hr: var(--border-base);
 	--tui-border: var(--border-base);
-	--tui-card-bg: var(--background-base);
 	--tui-muted: var(--text-base);
 }
 
@@ -3509,7 +3534,8 @@ body {
 
 .omp-menu__hint {
 	flex: 0 0 auto;
-	color: var(--text-weak);
+		/* Measured on this ground: `--text-weaker` is 2.55:1 and `--text-weak` 4.08:1. */
+	color: var(--text-base);
 	font-size: 11px;
 }
 

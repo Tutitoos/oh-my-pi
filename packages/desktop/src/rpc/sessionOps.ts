@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import type { RpcBridge } from "./bridge";
 
 /** How long a throwaway process gets to boot, switch session and answer. */
@@ -20,7 +21,6 @@ const ONESHOT_TIMEOUT_MS = 60_000;
  * nothing; it answers and dies.
  */
 export async function oneshot<T>(cwd: string, sessionPath: string, command: Record<string, unknown>): Promise<T> {
-	const { invoke } = await import("@tauri-apps/api/core");
 	const switchId = `oneshot-switch-${crypto.randomUUID()}`;
 	const runId = `oneshot-run-${crypto.randomUUID()}`;
 

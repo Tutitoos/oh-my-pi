@@ -1,3 +1,6 @@
+import { invoke } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
+import { openPath } from "@tauri-apps/plugin-opener";
 import {
 	type MouseEvent as ReactMouseEvent,
 	useCallback,
@@ -36,6 +39,7 @@ export function Sidebar({
 	onActivateTab,
 	onNewChatHere,
 	onNewSession,
+	onCloseTab,
 }: {
 	activeSessionPath?: string;
 	/*
@@ -57,6 +61,8 @@ export function Sidebar({
 	onNewChatHere(cwd: string): void;
 	/** The picker, for the empty space that belongs to no project. */
 	onNewSession(): void;
+	/** Forget a tab whose session no longer exists. */
+	onCloseTab(tabId: string): void;
 }) {
 	const [sessions, setSessions] = useState<SessionNode[]>([]);
 	const [query, setQuery] = useState("");
@@ -158,14 +164,23 @@ export function Sidebar({
 			const bridge = bridgeFor(tab?.tabId);
 			const project = session.projectRoot || session.cwd || "";
 
+			/*
+			 * A process, not a tab. `bridgeFor` answers for any mounted session view,
+			 * and a view stays mounted after the pool evicts its sidecar — so "Stop
+			 * the process" offered itself for sessions that had none, and rename and
+			 * export took the live path into a bridge with nothing behind it.
+			 */
+			const status = bridge?.getSnapshot().status;
+			const live = status === "ready" || status === "starting";
+
 			openMenu(
 				event,
 				sessionMenuItems(
-					{ live: Boolean(bridge), hasProject: Boolean(project) },
+					{ live, hasProject: Boolean(project) },
 					{
 						open: () => onOpenSession(session),
 						rename: () => setPrompt({ kind: "rename", session }),
-						exportHtml: () => void exportTranscript(session, bridge).catch(report),
+						exportHtml: () => void exportTranscript(session, live ? bridge : undefined).catch(report),
 						reveal: () => void revealFolder(project).catch(report),
 						copySessionPath: () => void writeClipboard(session.path).catch(report),
 						copyProjectPath: () => void writeClipboard(project).catch(report),
@@ -286,6 +301,7 @@ export function Sidebar({
 			{prompt?.kind === "delete" ? (
 				<DeletePrompt
 					session={prompt.session}
+					onCloseTab={onCloseTab}
 					onClose={() => setPrompt(null)}
 					onDone={() => {
 						setPrompt(null);
@@ -321,8 +337,16 @@ function RenamePrompt({
 		if (!trimmed || busy) return;
 		setBusy(true);
 		const tab = findOpenTab(tabs, session);
+		// Only a bridge with a process behind it; a mounted view whose sidecar was
+		// evicted still answers `bridgeFor`.
+		const bridge = bridgeFor(tab?.tabId);
+		const status = bridge?.getSnapshot().status;
 		renameSession(
-			{ bridge: bridgeFor(tab?.tabId), cwd: session.cwd || session.projectRoot || "", sessionPath: session.path },
+			{
+				bridge: status === "ready" || status === "starting" ? bridge : undefined,
+				cwd: session.cwd || session.projectRoot || "",
+				sessionPath: session.path,
+			},
 			trimmed,
 		)
 			.then(onDone)
@@ -382,24 +406,33 @@ function DeletePrompt({
 	onClose,
 	onDone,
 	onError,
+	onCloseTab,
 }: {
 	session: SessionNode;
 	tabs: readonly OpenTab[];
 	onClose(): void;
 	onDone(): void;
 	onError(cause: unknown): void;
+	onCloseTab(tabId: string): void;
 }) {
 	const [busy, setBusy] = useState(false);
 
 	const remove = async () => {
 		setBusy(true);
 		try {
-			// Order matters: a process still holding the file would keep writing to
-			// a session that no longer exists.
-			const bridge = bridgeFor(findOpenTab(tabs, session)?.tabId);
-			if (bridge) await bridge.stop().catch(() => {});
-			const { invoke } = await import("@tauri-apps/api/core");
+			/*
+			 * Order matters, and the failure of the first step matters too: a
+			 * process still holding the file would keep appending to a transcript
+			 * that no longer exists. This used to swallow it and unlink anyway,
+			 * reporting success over an orphan.
+			 */
+			const tab = findOpenTab(tabs, session);
+			const bridge = bridgeFor(tab?.tabId);
+			if (bridge) await bridge.stop();
 			await invoke("delete_session", { path: session.path });
+			// And forget the tab, or the next refresh lists it again as an unsaved
+			// chat — the row you just deleted, back under another name.
+			if (tab) onCloseTab(tab.tabId);
 			onDone();
 		} catch (cause) {
 			onError(cause);
@@ -608,7 +641,6 @@ const STATE_LABEL: Record<TabState, string> = {
 /** Open a directory in Finder. A folder is opened, not revealed inside itself. */
 async function revealFolder(directory: string): Promise<void> {
 	if (!directory) return;
-	const { openPath } = await import("@tauri-apps/plugin-opener");
 	await openPath(directory);
 }
 
@@ -620,7 +652,6 @@ async function revealFolder(directory: string): Promise<void> {
  * opened — never the path we asked for.
  */
 async function exportTranscript(session: SessionNode, bridge: RpcBridge | undefined): Promise<void> {
-	const { save } = await import("@tauri-apps/plugin-dialog");
 	const suggested = `${(session.title || "session").replace(/[^\w.-]+/g, "-").slice(0, 60)}.html`;
 	const target = await save({
 		title: "Export transcript",
@@ -633,6 +664,5 @@ async function exportTranscript(session: SessionNode, bridge: RpcBridge | undefi
 		{ bridge, cwd: session.cwd || session.projectRoot || "", sessionPath: session.path },
 		target,
 	);
-	const { openPath } = await import("@tauri-apps/plugin-opener");
 	await openPath(written);
 }

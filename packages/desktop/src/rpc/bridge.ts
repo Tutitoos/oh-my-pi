@@ -205,7 +205,7 @@ const EMPTY_SNAPSHOT: BridgeSnapshot = {
 interface Pending {
 	resolve(data: unknown): void;
 	reject(error: Error): void;
-	timer: ReturnType<typeof setTimeout>;
+	timer: Timer;
 	type: string;
 }
 
@@ -230,7 +230,7 @@ export class RpcBridge {
 	// Mutable interior; `#snapshot` is rebuilt lazily on read.
 	#status: BridgeStatus = "idle";
 	#stalled = false;
-	#stallTimer: ReturnType<typeof setTimeout> | null = null;
+	#stallTimer: Timer | null = null;
 	#ready: ReadyFrame | null = null;
 	#pid: number | null = null;
 	#prewarmed = false;
@@ -247,8 +247,8 @@ export class RpcBridge {
 	#booted = false;
 	#compaction: CompactionProgress | null = null;
 	#warning: string | null = null;
-	#compactionTimer: ReturnType<typeof setTimeout> | null = null;
-	#compactionPoll: ReturnType<typeof setInterval> | null = null;
+	#compactionTimer: Timer | null = null;
+	#compactionPoll: Timer | null = null;
 	#stateRefreshing = false;
 	#stateRefreshWanted = false;
 	#stderr: string[] = [];
@@ -963,6 +963,18 @@ export class RpcBridge {
 	clearError(): void {
 		if (this.#error === null) return;
 		this.#error = null;
+		this.#touch();
+	}
+
+	/**
+	 * Surface a failure that happened in the UI rather than on the wire.
+	 *
+	 * The transcript's own actions — copying a message, a tool's output — have no
+	 * other way to say they failed, and a menu that closes looks exactly like one
+	 * that worked. The banner is already here and already dismissable.
+	 */
+	reportError(cause: unknown): void {
+		this.#error = cause instanceof Error ? cause.message : String(cause);
 		this.#touch();
 	}
 
