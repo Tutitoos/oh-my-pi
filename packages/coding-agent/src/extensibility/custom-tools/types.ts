@@ -115,13 +115,17 @@ export type CustomToolSessionEvent =
 	  }
 	| {
 			reason: "auto_compaction_start";
-			trigger: "threshold" | "overflow" | "idle" | "incomplete";
-			action: "context-full" | "remote" | "handoff" | "shake" | "snapcompact";
+			/** `manual` is an operator asking; the rest are the engine's own triggers. */
+			trigger: "threshold" | "overflow" | "idle" | "incomplete" | "manual";
+			/** `soft` only ever reaches here from a manual pass. */
+			action: "context-full" | "remote" | "handoff" | "shake" | "snapcompact" | "soft";
 	  }
 	| {
 			reason: "auto_compaction_end";
-			action: "context-full" | "remote" | "handoff" | "shake" | "snapcompact";
+			action: "context-full" | "remote" | "handoff" | "shake" | "snapcompact" | "soft";
 			result: CompactionResult | undefined;
+			/** Context tokens after the rewrite; `CompactionResult` carries only the before. */
+			tokensAfter?: number;
 			aborted: boolean;
 			willRetry: boolean;
 			errorMessage?: string;

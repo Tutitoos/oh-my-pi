@@ -284,6 +284,10 @@ export class EventController {
 				this.ctx.ui.requestRender(true);
 			},
 			goal_updated: async () => {},
+			// The terminal already knows: it is the thing that moved the mode, and
+			// it keeps its own `planModeEnabled` mirror. The event exists for the
+			// clients that are not driving.
+			plan_mode_changed: async () => {},
 		} satisfies AgentSessionEventHandlers;
 	}
 

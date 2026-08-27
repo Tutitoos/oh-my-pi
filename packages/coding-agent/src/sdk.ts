@@ -1054,6 +1054,7 @@ function createCustomToolsExtension(tools: CustomTool[], sourcePaths?: ReadonlyM
 					reason: "auto_compaction_end",
 					action: event.action,
 					result: event.result,
+					tokensAfter: event.tokensAfter,
 					aborted: event.aborted,
 					willRetry: event.willRetry,
 					errorMessage: event.errorMessage,

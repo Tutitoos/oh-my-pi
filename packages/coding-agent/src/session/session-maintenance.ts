@@ -731,6 +731,11 @@ export class SessionMaintenance {
 		}
 		let methods: CompactionMethod[] = [];
 		let selectedMethodIndex = -1;
+		/* Hoisted: the catch and the fallback branch both have to name the method
+		   they were running when they report the end of the pass. */
+		let selectedMethod: CompactionMethod | undefined;
+		/** Whether this call emitted a start it still owes an end. */
+		let manualLifecycleOpen = false;
 		let compactionCommitted = false;
 		let methodAttempted = false;
 		const compactionAbortController = retryController ?? new AbortController();
@@ -756,7 +761,6 @@ export class SessionMaintenance {
 			const compactionSettings = this.#host.settings.getGroup("compaction");
 			methods = resolveCompactionMethodOrder(compactMode?.overrides.methodOrder ?? compactionSettings.methodOrder);
 			const explicitSnapcompact = compactMode?.name === "snapcompact";
-			let selectedMethod: CompactionMethod | undefined;
 			for (let index = methodOffset; index < methods.length; index++) {
 				const method = methods[index];
 				if (method === "remote") {
@@ -786,6 +790,24 @@ export class SessionMaintenance {
 			}
 			if (!selectedMethod) {
 				throw new Error("No configured compaction method can run manually.");
+			}
+
+			/*
+			 * A manual pass announces itself the same way an automatic one does.
+			 * Until now it emitted nothing at all, so any client without a terminal
+			 * had to read the prose the slash command prints to know what happened.
+			 * `reason: "manual"` is what tells the two apart.
+			 *
+			 * Only the owning call brackets: the method-fallback path re-enters this
+			 * function with the same controller, and a second start would read as a
+			 * second compaction.
+			 */
+			if (ownsCompactionController) {
+				await this.#emitLifecycleEvent(
+					{ type: "auto_compaction_start", reason: "manual", action: selectedMethod },
+					false,
+				);
+				manualLifecycleOpen = true;
 			}
 
 			const effectiveSettings = resolveMethodSettings(compactionSettings, selectedMethod);
@@ -1054,6 +1076,22 @@ export class SessionMaintenance {
 				preserveData: snapcompact.stripPreservedArchive(preserveData),
 			};
 			options?.onComplete?.(compactionResult);
+			if (manualLifecycleOpen) {
+				manualLifecycleOpen = false;
+				await this.#emitLifecycleEvent(
+					{
+						type: "auto_compaction_end",
+						action: selectedMethod,
+						result: compactionResult,
+						// The one number the operator wants, and the one
+						// `CompactionResult` does not carry: it is computed at commit.
+						tokensAfter: this.#host.getContextUsage()?.tokens,
+						aborted: false,
+						willRetry: false,
+					},
+					false,
+				);
+			}
 			return compactionResult;
 		} catch (error) {
 			const err = error instanceof Error ? error : new Error(String(error));
@@ -1070,7 +1108,50 @@ export class SessionMaintenance {
 					`${methods[selectedMethodIndex]} compaction failed; trying the next preferred method`,
 					"compaction",
 				);
-				return await this.compact(customInstructions, options, selectedMethodIndex + 1, compactionAbortController);
+				/*
+				 * The fallback runs as a nested call that does not own the controller,
+				 * so it emits nothing. This call still owes the end it opened — without
+				 * closing it here a compaction that succeeded on the second method
+				 * would look, to a listener, like one that never finished.
+				 */
+				const fallbackResult = await this.compact(
+					customInstructions,
+					options,
+					selectedMethodIndex + 1,
+					compactionAbortController,
+				);
+				if (manualLifecycleOpen) {
+					manualLifecycleOpen = false;
+					await this.#emitLifecycleEvent(
+						{
+							type: "auto_compaction_end",
+							action: selectedMethod ?? "context-full",
+							result: fallbackResult,
+							tokensAfter: this.#host.getContextUsage()?.tokens,
+							aborted: false,
+							willRetry: false,
+						},
+						false,
+					);
+				}
+				return fallbackResult;
+			}
+			if (manualLifecycleOpen) {
+				manualLifecycleOpen = false;
+				const cancelled = error instanceof CompactionCancelledError || compactionAbortController.signal.aborted;
+				await this.#emitLifecycleEvent(
+					{
+						type: "auto_compaction_end",
+						action: selectedMethod ?? "context-full",
+						result: undefined,
+						aborted: cancelled,
+						willRetry: false,
+						// A cancellation is the operator's own doing, not a failure to
+						// report back at them.
+						errorMessage: cancelled ? undefined : err.message,
+					},
+					false,
+				);
 			}
 			options?.onError?.(err);
 			throw error;
