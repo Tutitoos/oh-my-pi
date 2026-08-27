@@ -9,6 +9,26 @@ bun run app:dev        # Tauri window + Bun dev server on :1420
 bun test               # RpcBridge and protocol conformance
 ```
 
+## What it does
+
+One window, three columns: the sessions omp has on disk, the conversation, and a
+side panel for changes, files, tasks and subagents.
+
+- **Sessions.** Grouped by their git checkout, worktrees nested under their
+  parent. Rename, export to HTML, reveal in Finder or delete from the context
+  menu. A chat you start appears in the list before omp has written it to disk.
+- **The conversation.** omp's own 30 tool renderers, its markdown, its approval
+  dialogs, plan mode with the plan visible when you approve it, and compaction
+  with progress and a cancel that works.
+- **The panel.** Read-only diff of what the session changed, a file tree from
+  `git ls-files`, the agent's task list, and live subagents.
+- **Everywhere.** A context menu on every surface, keyboard shortcuts by desktop
+  convention rather than the TUI's, and native notifications when a turn ends.
+
+Settings, plugins and MCP servers are managed from `/manage`, over short CLI
+invocations rather than the RPC session — none of the 59 RPC commands is about
+configuration.
+
 ## Why a sidecar
 
 omp cannot be embedded in a Node process. It is deeply Bun-coupled — 264
@@ -61,15 +81,37 @@ tabs stay in the UI and replay through `switch_session` when reselected.
 ## Vendored design system
 
 `src/styles/vendor/opencode/` is a copy of opencode's stylesheets (MIT, see
-`THIRD-PARTY-NOTICES.txt`). They are plain CSS with cascade layers — no Tailwind,
-no framework coupling — so they apply from React by using the same class and
-`data-*` attributes. Buttons need all three: `data-component="button"`,
-`data-variant`, `data-size`; without the last there is no height or padding.
+`THIRD-PARTY-NOTICES.txt`). Only the token foundation is imported — `colors.css`,
+`theme.css`, `base.css`. **None of the 25 component sheets are**: the app is flat
+and monospace after opencode's TUI rather than its web client, so `card`,
+`dialog`, `tabs` and the rest have no consumer.
+
+They are still worth keeping, and they are used: `dialog.css` and
+`dropdown-menu.css` are read as **measurable specifications** for the app's own
+modal and context menu — its surfaces, its padding rhythm, its
+"one border on the panel, none on its rows". Copy the measurements, not the
+sheet; the radius and shadow they declare are exactly what this app removes.
+
+Buttons keep `data-component="button"` and `data-variant` because 22 call sites
+carry them and the variants still mean the same thing. `data-size` no longer
+does anything — a flat button takes its height from its own padding.
 
 `src/styles/tv-bridge.css` points omp's 30 tool renderers at that palette. It
 defines the host-side names the renderers already read (`--fg`, `--accent`,
 `--bg-raised`, …) rather than overriding `--tv-*`, because that fallback chain is
 the seam they were designed around.
+
+### The transcript speaks omp's palette, not opencode's
+
+`src/styles/tui-theme.css` is **generated** — `bun run gen:theme` resolves omp's
+`titanium` theme from its own JSON and re-points the app's token names inside
+`.omp-main`. The chrome stays on opencode's neutrals; the column where the agent
+talks matches what the same session looks like in a terminal. Editing the
+generated file by hand is how a palette drifts, so don't.
+
+The bundled face is MesloLGM Nerd Font (`bun run gen:fonts`, pinned by release
+and checksum), because the tool renderers draw with nerd glyphs and a fallback
+stack turns them into boxes.
 
 Local overrides go in `src/styles/app.css`, which sits in a later cascade layer.
 Do not edit vendored files.
@@ -82,6 +124,24 @@ Do not edit vendored files.
 - `agent_start` is idempotent per tab, which is what makes React StrictMode's
   double-mount and HMR reloads safe. The `useBridge` effect deliberately does not
   kill on cleanup.
+- **A tab id is the sidecar's label, and the pool outlives the webview.** Ids for
+  new chats therefore derive from nothing the webview owns (`crypto.randomUUID`).
+  An id built from a counter and a cwd collides with itself across a reload and
+  silently re-attaches a blank tab to a live conversation.
+- **`sessionPath` is an instruction, not an identity.** `useBridge` boots on it
+  and the last step of booting is `switch_session`, which aborts the session — so
+  a tab that learns which session it is records `sessionId` beside it, never the
+  path.
+- **Never point a second process at a live session file.** Two sidecars on one
+  jsonl is two agents appending to it. Resolve the open tab first (`findOpenTab`)
+  and use its bridge; only a session with no process goes through `agent_oneshot`,
+  which runs outside the pool so it can evict nothing.
+- The context menu suppresses the webview's own everywhere, so text fields get
+  cut/copy/paste from `tauri-plugin-clipboard-manager` rather than
+  `navigator.clipboard`, whose read half WKWebView is least reliable about.
+- Edits to controlled inputs go through `document.execCommand("insertText")`:
+  assigning `.value` updates the DOM without telling React, and the next render
+  puts the old text back.
 
 ## Packaging
 
