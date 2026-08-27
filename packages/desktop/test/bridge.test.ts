@@ -1050,3 +1050,76 @@ describe("RpcBridge — session state stays fresh", () => {
 		expect(bridge.getSnapshot()).toBeDefined();
 	});
 });
+
+describe("RpcBridge — blocking UI requests", () => {
+	const ask = (id: string, title: string) => ({
+		type: "extension_ui_request" as const,
+		id,
+		method: "select" as const,
+		title,
+		options: ["a", "b"],
+	});
+
+	test("a second question waits its turn instead of erasing the first", async () => {
+		// One slot meant the server was left holding a promise nobody could answer:
+		// the overwritten request never reached a human and never resolved.
+		const { transport, bridge } = await connected();
+
+		transport.frames(ask("q1", "first"), ask("q2", "second"));
+		await settle();
+		expect(bridge.getSnapshot().pendingUi?.id).toBe("q1");
+
+		bridge.answerUi({ id: "q1", value: "a" });
+		await settle();
+		expect(bridge.getSnapshot().pendingUi?.id).toBe("q2");
+
+		bridge.answerUi({ id: "q2", value: "b" });
+		await settle();
+		expect(bridge.getSnapshot().pendingUi).toBeNull();
+		// Both were answered, in order.
+		const answers = transport.sent
+			.map(line => JSON.parse(line))
+			.filter(frame => frame.type === "extension_ui_response");
+		expect(answers.map(frame => frame.id)).toEqual(["q1", "q2"]);
+	});
+
+	test("a cancelled question is withdrawn, and the next one takes the screen", async () => {
+		// The server settles its own side before sending this, so there is nothing
+		// to answer — the dialog just has to go, and while it is up it also
+		// suppresses Escape-to-abort.
+		const { transport, bridge } = await connected();
+
+		transport.frames(ask("q1", "first"), ask("q2", "second"));
+		await settle();
+		transport.frames({ type: "extension_ui_request", id: "c1", method: "cancel", targetId: "q1" });
+		await settle();
+
+		expect(bridge.getSnapshot().pendingUi?.id).toBe("q2");
+		expect(transport.sent.map(line => JSON.parse(line)).some(frame => frame.id === "q1")).toBe(false);
+	});
+
+	test("cancelling one that is still queued removes it without disturbing the screen", async () => {
+		const { transport, bridge } = await connected();
+
+		transport.frames(ask("q1", "first"), ask("q2", "second"));
+		await settle();
+		transport.frames({ type: "extension_ui_request", id: "c1", method: "cancel", targetId: "q2" });
+		await settle();
+		expect(bridge.getSnapshot().pendingUi?.id).toBe("q1");
+
+		bridge.answerUi({ id: "q1", value: "a" });
+		await settle();
+		expect(bridge.getSnapshot().pendingUi).toBeNull();
+	});
+
+	test("a restart drops questions the dead process asked", async () => {
+		const { transport, bridge } = await connected();
+
+		transport.frames(ask("q1", "first"));
+		await settle();
+		expect(bridge.getSnapshot().pendingUi).not.toBeNull();
+
+		await bridge.start();
+		expect(bridge.getSnapshot().pendingUi).toBeNull();
+	});
+});

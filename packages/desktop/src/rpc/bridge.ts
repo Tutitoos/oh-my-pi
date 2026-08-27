@@ -74,6 +74,14 @@ const COMPACTION_TIMEOUT_MS = 900_000;
  * case in this client that earns a poll: it runs for minutes, it is rare, and
  * being wrong about it is very visible.
  */
+/** A lifecycle frame says `started`; everything downstream speaks `running`. */
+function normalizeSubagentStatus(status: string | undefined): SubagentSnapshot["status"] {
+	if (status === "started") return "running";
+	if (status === "pending" || status === "running" || status === "completed") return status;
+	if (status === "failed" || status === "aborted") return status;
+	return "pending";
+}
+
 const COMPACTION_POLL_MS = 4_000;
 
 /*
@@ -233,6 +241,8 @@ export class RpcBridge {
 	#subagentList: SubagentSnapshot[] = [];
 	#events: SessionEventFrame[] = [];
 	#pendingUi: ExtensionUiRequestFrame | null = null;
+	/** Blocking requests that arrived while another was on screen. */
+	#uiQueue: ExtensionUiRequestFrame[] = [];
 	#todoPhases: readonly TodoPhase[] = [];
 	#booted = false;
 	#compaction: CompactionProgress | null = null;
@@ -344,6 +354,9 @@ export class RpcBridge {
 		this.#exitExpected = false;
 		this.#booted = false;
 		this.#todoPhases = [];
+		// A new process cannot answer questions the old one asked.
+		this.#pendingUi = null;
+		this.#uiQueue = [];
 		// A compaction cannot survive the process that was running it.
 		this.#abandonCompaction();
 		this.#touch();
@@ -509,6 +522,23 @@ export class RpcBridge {
 			return;
 		}
 
+		/*
+		 * The server withdrawing a request it had already asked. It has settled its
+		 * own side, so there is nothing to answer — the dialog just has to go, or
+		 * it sits there forever collecting an answer nobody is waiting for. It also
+		 * suppresses Escape-to-abort while it is up, so a stale one is worse than
+		 * merely useless.
+		 */
+		if (frame.method === "cancel") {
+			const target = frame.targetId;
+			this.#uiQueue = this.#uiQueue.filter(queued => queued.id !== target);
+			if (this.#pendingUi?.id === target) {
+				this.#pendingUi = this.#uiQueue.shift() ?? null;
+			}
+			this.#touch();
+			return;
+		}
+
 		// Non-blocking methods (notify, setStatus, setWidget, setTitle, …) need
 		// no reply. Verified: an unanswered `setWidget` did not wedge the server.
 		if (!BLOCKING_UI_METHODS.has(frame.method)) {
@@ -516,17 +546,30 @@ export class RpcBridge {
 			return;
 		}
 
-		this.#pendingUi = frame;
+		/*
+		 * One slot was not enough. The server can have more than one question
+		 * outstanding — a plan review raised while an `ask` is open, say — and
+		 * overwriting the first left its promise hanging on the server with no way
+		 * for anyone to answer it. They queue, and the next appears as the current
+		 * one is answered.
+		 */
+		if (this.#pendingUi) this.#uiQueue.push(frame);
+		else this.#pendingUi = frame;
 		this.#touch();
 	}
 
-	/** Answer the outstanding blocking UI request. */
+	/** Answer the outstanding blocking UI request, then show the next one. */
 	answerUi(response: ExtensionUiAnswer): void {
 		const pending = this.#pendingUi;
 		if (!pending) return;
-		this.#pendingUi = null;
+		this.#pendingUi = this.#uiQueue.shift() ?? null;
 		this.#touch();
-		void this.#write({ type: "extension_ui_response", ...response });
+		// Reported, not discarded: answering a dialog whose sidecar has died
+		// rejects here, and `request()` already treats a failed write this way.
+		this.#write({ type: "extension_ui_response", ...response }).catch(cause => {
+			this.#error = cause instanceof Error ? cause.message : String(cause);
+			this.#touch();
+		});
 	}
 
 	/**
@@ -551,7 +594,13 @@ export class RpcBridge {
 			id,
 			index: record.index ?? existing?.index ?? this.#subagents.size,
 			agent: record.agent ?? record.progress?.agent ?? existing?.agent ?? "subagent",
-			status: record.status ?? record.progress?.status ?? existing?.status ?? "pending",
+			/*
+			 * `started` is what a lifecycle frame says; the roster and the status
+			 * dot only know the five in `SubagentProgress`. The server normalises it
+			 * the same way for its own snapshot (`rpc-subagents.ts`), so a subagent
+			 * that had only ever announced itself rendered with no state at all.
+			 */
+			status: normalizeSubagentStatus(record.status ?? record.progress?.status ?? existing?.status),
 			lastUpdate: record.lastUpdate ?? Date.now(),
 			progress: record.progress ?? existing?.progress,
 		};
@@ -712,6 +761,10 @@ export class RpcBridge {
 			this.#compactionTimer = null;
 			if (!this.#compaction) return;
 			this.#compaction = null;
+			// The poll belongs to the banner. Clearing the banner inline used to
+			// leave the 4-second `get_state` running for the life of the tab, and
+			// every other exit is a no-op once `#compaction` is null.
+			this.#stopCompactionPoll();
 			this.#error = "The compaction never reported back. The session may or may not have been rewritten.";
 			this.#touch();
 		}, COMPACTION_REPORT_TIMEOUT_MS);

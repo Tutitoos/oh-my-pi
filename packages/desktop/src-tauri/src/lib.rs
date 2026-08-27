@@ -232,6 +232,8 @@ struct Sessions(Mutex<Pool>);
 #[derive(Default)]
 struct LineAssembler {
 	buf: Vec<u8>,
+	/// True while the tail of an over-long frame is still arriving.
+	discarding: bool,
 }
 
 impl LineAssembler {
@@ -245,10 +247,20 @@ impl LineAssembler {
 		while let Some(i) = self.buf.iter().position(|&b| b == b'\n') {
 			let mut line: Vec<u8> = self.buf.drain(..=i).collect();
 			line.pop(); // '\n'
+			if self.discarding {
+				// The remainder of the frame we gave up on. Its end is this newline.
+				self.discarding = false;
+				continue;
+			}
 			Self::emit(line, out);
 		}
 		if self.buf.len() > MAX_LINE_BYTES {
-			self.buf.clear(); // runaway line; drop rather than grow forever
+			// Runaway line: drop it rather than grow forever — but remember that we
+			// are mid-discard. Clearing alone left the *tail* of the same frame in
+			// the buffer, and the next newline shipped it upward as if it were a
+			// complete line: a fragment of JSON delivered as a whole one.
+			self.buf.clear();
+			self.discarding = true;
 		}
 		if flush_tail {
 			self.flush(out);
@@ -256,6 +268,13 @@ impl LineAssembler {
 	}
 
 	fn flush(&mut self, out: &mut Vec<String>) {
+		if self.discarding {
+			// Never completed, so there is no line here — only the tail of one we
+			// already refused.
+			self.buf.clear();
+			self.discarding = false;
+			return;
+		}
 		if self.buf.is_empty() {
 			return;
 		}
@@ -379,7 +398,18 @@ async fn pump(app: AppHandle, sink: Sink, mut rx: Receiver<CommandEvent>) {
 	let label = sink.lock().ok().map(|guard| guard.tab_id.clone());
 	if let Some(label) = label {
 		if let Ok(mut pool) = app.state::<Sessions>().0.lock() {
-			pool.sessions.remove(&label);
+			// Only if the entry under that key is still ours. A suspend/resume
+			// cycle can put a *newer* child under the same tab id before this
+			// pump notices its own has died, and removing by key alone orphaned
+			// the live replacement — the process kept running with nothing in the
+			// pool pointing at it.
+			let ours = pool
+				.sessions
+				.get(&label)
+				.is_some_and(|session| Arc::ptr_eq(&session.sink, &sink));
+			if ours {
+				pool.sessions.remove(&label);
+			}
 			if label == PREWARM_LABEL {
 				pool.prewarm = None;
 			}
@@ -537,13 +567,32 @@ fn agent_start(
 	drop(pool); // never hold a std guard across the spawn boundary
 
 	let (child, pid, sink) = spawn_sidecar(&app, &tab_id, cwd.as_deref())?;
-	adopt(&sink, &tab_id, on_event)?;
 
 	let mut pool = sessions.0.lock().map_err(|_| "sessions mutex poisoned")?;
+	/*
+	 * Someone else may have finished spawning for this tab while the lock was
+	 * down — it has to be, because a std guard must not be held across a spawn.
+	 * Two `agent_start` calls for one tab both missed the check above, both
+	 * spawned, and the second `insert` dropped the first child's handle on the
+	 * floor: a process nothing could reach, and one more live sidecar than
+	 * `MAX_LIVE_SESSIONS` allows. Losing the race costs one wasted spawn; the
+	 * loser kills its own child and attaches to the winner's.
+	 */
+	if let Some(existing) = pool.sessions.get_mut(&tab_id) {
+		existing.last_active = Instant::now();
+		let winner = Arc::clone(&existing.sink);
+		let winner_pid = existing.pid;
+		drop(pool);
+		let _ = child.kill();
+		adopt(&winner, &tab_id, on_event)?;
+		return Ok(AgentHandle { pid: winner_pid, resumed: true, prewarmed: false });
+	}
+
 	pool
 		.sessions
-		.insert(tab_id, Session { child, pid, sink, last_active: Instant::now() });
+		.insert(tab_id.clone(), Session { child, pid, sink: Arc::clone(&sink), last_active: Instant::now() });
 	drop(pool);
+	adopt(&sink, &tab_id, on_event)?;
 
 	schedule_prewarm(&app);
 	Ok(AgentHandle { pid, resumed: false, prewarmed: false })
@@ -614,24 +663,63 @@ fn agent_kill(sessions: State<'_, Sessions>, tab_id: String) -> Result<(), Strin
 /// would also let it spawn the long-lived sidecar and bypass the relay.
 #[tauri::command]
 async fn omp_cli(app: AppHandle, args: Vec<String>) -> Result<String, String> {
-	let output = app
+	/*
+	 * Spawned rather than `output()`ed so it can be killed.
+	 *
+	 * `output()` waits for the channel to close and offers no way to reach the
+	 * child, and `CommandChild` does not kill on drop — so a CLI invocation that
+	 * hung (a wedged `omp sessions`, a stuck lock) left a process behind for the
+	 * life of the app with nothing tracking it. The pool does not own these:
+	 * they are short-lived by design, which is exactly why they need a deadline.
+	 */
+	let (mut rx, child) = app
 		.shell()
 		.sidecar(SIDECAR_NAME)
 		.map_err(|e| e.to_string())?
 		.args(args)
-		.output()
-		.await
+		.spawn()
 		.map_err(|e| e.to_string())?;
 
-	if !output.status.success() {
-		return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+	let deadline = Instant::now() + Duration::from_millis(CLI_TIMEOUT_MS);
+	let mut stdout = Vec::new();
+	let mut stderr = Vec::new();
+	let mut code: Option<i32> = None;
+
+	while Instant::now() < deadline {
+		let left = deadline.saturating_duration_since(Instant::now());
+		let Ok(event) = tokio::time::timeout(left, rx.recv()).await else { break };
+		match event {
+			Some(CommandEvent::Stdout(bytes)) => stdout.extend_from_slice(&bytes),
+			Some(CommandEvent::Stderr(bytes)) => stderr.extend_from_slice(&bytes),
+			Some(CommandEvent::Terminated(status)) => {
+				code = status.code;
+				break;
+			}
+			Some(_) => continue,
+			None => break,
+		}
 	}
-	Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+
+	let _ = child.kill();
+
+	match code {
+		Some(0) => Ok(String::from_utf8_lossy(&stdout).into_owned()),
+		Some(status) => {
+			let message = String::from_utf8_lossy(&stderr).trim().to_string();
+			Err(if message.is_empty() { format!("exited with status {status}") } else { message })
+		}
+		None => Err("the command did not finish in time".to_string()),
+	}
 }
 
 /// How many dropped paths to remember before starting over. Far above any real
 /// session; it exists so a long-lived window cannot grow the set forever.
 const MAX_REMEMBERED_DROPS: usize = 512;
+
+/// How long a short CLI invocation (`omp sessions --json`, `omp config …`) gets.
+/// Measured at 0.5-1s for the session listing, so this is generous by two orders
+/// of magnitude and exists only so a wedged child cannot outlive the call.
+const CLI_TIMEOUT_MS: u64 = 60_000;
 
 /// Paths the user actually dropped on the window.
 ///
