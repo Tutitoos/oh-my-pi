@@ -54,21 +54,29 @@ export function McpScreen({ bridge, commands }: { bridge: RpcBridge; commands: r
 				</p>
 			</header>
 
+			{/*
+			 * Only `list`, because only `list` can work from here. `test` takes a
+			 * server name and this screen has none to offer — its name field is for
+			 * the server being added — so the button could only ever come back with
+			 * "Usage: /mcp test <name>". And `reconnect` is in the agent's
+			 * TUI-only set, so over RPC it does not exist at all. Two buttons that
+			 * cannot succeed are worse than a sentence saying where to go.
+			 */}
 			<div className="omp-screen__row">
-				{["list", "test", "reconnect"].map(action => (
-					<button
-						key={action}
-						type="button"
-						data-component="button"
-						data-variant="ghost"
-						data-size="normal"
-						disabled={!hasSubcommand(mcp, action)}
-						title={hasSubcommand(mcp, action) ? undefined : `This omp build has no /mcp ${action}`}
-						onClick={() => void bridge.prompt(`/mcp ${action}`).catch(() => {})}
-					>
-						/mcp {action}
-					</button>
-				))}
+				<button
+					type="button"
+					data-component="button"
+					data-variant="ghost"
+					data-size="normal"
+					disabled={!hasSubcommand(mcp, "list")}
+					title={hasSubcommand(mcp, "list") ? undefined : "This omp build has no /mcp list"}
+					onClick={() => void bridge.prompt("/mcp list").catch(() => {})}
+				>
+					/mcp list
+				</button>
+				<span className="omp-screen__hint">
+					Per-server actions need the name: run <code>/mcp test &lt;name&gt;</code> in a session.
+				</span>
 			</div>
 
 			<section className="omp-settings__group">

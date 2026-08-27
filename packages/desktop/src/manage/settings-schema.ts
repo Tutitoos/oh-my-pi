@@ -79,10 +79,17 @@ export const SETTING_GROUPS: SettingGroup[] = [
 			{
 				key: "power.sleepPrevention",
 				label: "Prevent sleep while working",
+				/*
+				 * All four, in the agent's own order — `idle` is the default, and
+				 * leaving it out made the picker show "Off" for a machine that was in
+				 * fact preventing idle sleep. The levels are cumulative, so the labels
+				 * say what each one adds rather than naming a subsystem.
+				 */
 				options: [
 					{ value: "off", label: "Off" },
-					{ value: "system", label: "System" },
-					{ value: "display", label: "Display" },
+					{ value: "idle", label: "Prevent idle sleep" },
+					{ value: "display", label: "Prevent display sleep" },
+					{ value: "system", label: "Prevent system sleep" },
 				],
 			},
 		],

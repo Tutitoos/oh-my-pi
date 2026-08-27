@@ -1,5 +1,5 @@
 import { type CSSProperties, useCallback, useEffect, useMemo, useState } from "react";
-import { Outlet, useNavigate } from "react-router";
+import { Outlet, useLocation, useNavigate } from "react-router";
 import { CommandPalette, type PaletteAction } from "./components/CommandPalette";
 import { ContextMenu } from "./components/ContextMenu";
 import { ProjectPicker } from "./components/ProjectPicker";
@@ -63,6 +63,12 @@ const SCRATCH: OpenTab = { tabId: "scratch", title: "New session" };
 
 export function App() {
 	const navigate = useNavigate();
+	/*
+	 * Only the session route renders a side panel. The grid reserved its column
+	 * regardless, so Settings and onboarding sat next to an empty 420px track with
+	 * a resize handle floating over it, dragging a panel that was not there.
+	 */
+	const { pathname } = useLocation();
 	const [tabs, setTabs] = useState<OpenTab[]>([SCRATCH]);
 	const [activeTabId, setActiveTabId] = useState(SCRATCH.tabId);
 	const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -70,6 +76,13 @@ export function App() {
 	const [paletteOpen, setPaletteOpen] = useState(false);
 	const [closePrompt, setClosePrompt] = useState<((confirmed: boolean) => void) | null>(null);
 	const widths = usePanelWidths({ sidebarOpen, panelOpen });
+
+	/*
+	 * Only the session route renders a side panel. The grid reserved its column
+	 * regardless, so Settings and onboarding sat beside an empty 420px track with
+	 * a resize handle floating over it, dragging a panel that was not there.
+	 */
+	const panelVisible = panelOpen && (pathname === "/" || pathname.startsWith("/session"));
 
 	const activeTab = tabs.find(tab => tab.tabId === activeTabId) ?? tabs[0];
 
@@ -276,7 +289,7 @@ export function App() {
 	return (
 		<div
 			className="omp-shell"
-			data-panel={panelOpen}
+			data-panel={panelVisible}
 			data-sidebar={sidebarOpen}
 			/*
 			 * The grid reads its side columns from these, so a drag is one custom
@@ -334,7 +347,7 @@ export function App() {
 					/>
 				) : null}
 
-				{panelOpen ? (
+				{panelVisible ? (
 					<ResizeHandle
 						side="right"
 						width={widths.panel}

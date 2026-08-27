@@ -1,5 +1,5 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useOutletContext } from "react-router";
 import type { OpenTab, ShellContext } from "../app";
 import { ApprovalDialog } from "../components/ApprovalDialog";
@@ -112,6 +112,13 @@ function SessionView({
 	useEffect(() => {
 		if (reportedSessionId) adoptSession(tab.tabId, reportedSessionId);
 	}, [adoptSession, tab.tabId, reportedSessionId]);
+
+	/*
+	 * Stable, because `Transcript` is `memo`d and so are the cards beneath it. An
+	 * inline arrow is a new prop on every render, which defeats all three: one
+	 * keystroke in the composer re-rendered every message and every tool card.
+	 */
+	const reportToBanner = useCallback((cause: unknown) => bridge.reportError(cause), [bridge]);
 
 	// Publish the bridge itself, so the sidebar's context menu can act on a live
 	// session through the process that already owns it.
@@ -357,11 +364,7 @@ function SessionView({
 						</div>
 					</div>
 				) : (
-					<Transcript
-						entries={snapshot.transcript}
-						streaming={streaming}
-						onError={cause => bridge.reportError(cause)}
-					/>
+					<Transcript entries={snapshot.transcript} streaming={streaming} onError={reportToBanner} />
 				)}
 
 				<div>

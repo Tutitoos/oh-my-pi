@@ -35,6 +35,23 @@ export function ComposerEditor({
 	useLayoutEffect(() => {
 		const node = editorRef.current;
 		if (!node || disabled) return;
+		/*
+		 * Never take focus away from something else the user is using. This effect
+		 * now runs when the textarea stops being disabled — which is when the
+		 * session finishes booting, several seconds in, by which time you may well
+		 * be typing in the session filter. Claiming focus then would eat the rest
+		 * of what you were writing.
+		 */
+		const active = document.activeElement;
+		const busyElsewhere =
+			active !== null &&
+			active !== node &&
+			active !== document.body &&
+			(active instanceof HTMLInputElement ||
+				active instanceof HTMLTextAreaElement ||
+				(active instanceof HTMLElement && active.isContentEditable));
+		if (busyElsewhere) return;
+
 		node.focus();
 		node.setSelectionRange(selection.current.start, selection.current.end);
 	}, [editorRef, selection, variant, disabled]);

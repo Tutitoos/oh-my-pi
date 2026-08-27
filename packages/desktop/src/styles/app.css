@@ -382,7 +382,10 @@ body {
 	width: 46px;
 	height: 4px;
 	border-radius: 2px;
-	background: var(--background-weak);
+		/* Inside `.omp-main`, `--background-weak` resolves to the very colour the
+	 * status line is painted, so the track vanished and the fill floated with
+	 * no scale behind it. */
+	background: var(--tui-border, var(--border-base));
 	overflow: hidden;
 	vertical-align: middle;
 }
@@ -1343,7 +1346,14 @@ body {
 	box-shadow: none !important;
 }
 
-.omp-dot {
+.omp-dot,
+/*
+ * The working indicator's three dots. A square version of them is not the same
+ * object — the same reason `.omp-dot` is here — and the flattener's `:not()`
+ * list named the dot and forgot these, so they animated as squares in both the
+ * turn indicator and the compaction banner.
+ */
+.omp-working span {
 	border-radius: 50% !important;
 	box-shadow: none !important;
 }
@@ -1810,8 +1820,14 @@ body {
 	border-left-color: var(--icon-critical-base);
 }
 
+/*
+ * Deliberately no `font-weight` here any more. This rule predates the panel's
+ * restyle, which re-specified the title without one so that
+ * `.omp-todo__phase[data-active] .omp-todo__title` could be the only bold
+ * heading. Leaving 700 in made every phase bold and that bump a no-op.
+ */
 .omp-todo__title {
-	font-weight: 700;
+	font-size: var(--font-size-small);
 }
 
 /* -- sidebar: density ----------------------------------------------------- */
@@ -2050,7 +2066,8 @@ body {
 	display: block;
 	height: auto;
 	padding: 20px 14px;
-	color: var(--text-weaker);
+		/* Body copy, not a disabled control: `--text-weaker` measured 2.5:1 here. */
+	color: var(--text-base);
 	text-align: left;
 }
 
@@ -2457,6 +2474,11 @@ body {
 	gap: 0;
 }
 
+/* The title's own inset is the dialog's, and this row already has one. */
+.omp-composer-modal__head .omp-modal__title {
+	padding: 0;
+}
+
 .omp-composer-modal__head {
 	display: flex;
 	align-items: center;
@@ -2515,7 +2537,8 @@ body {
 /* Pushes the send control right and states the keys, since they differ here. */
 .omp-composer-modal__hint {
 	margin-left: auto;
-	color: var(--text-weaker);
+		/* 2.6:1 on the dialog's ground. Its twins were raised; this one was missed. */
+	color: var(--text-base);
 	font-size: var(--font-size-small);
 }
 
@@ -2851,6 +2874,21 @@ body {
 .omp-composer__input:focus {
 	border-color: var(--tui-accent);
 	background: var(--tui-card-bg);
+}
+
+/*
+ * After the focus rule, and that ordering is the point.
+ *
+ * A drop target is almost always focused — you were typing before you dragged —
+ * and the two selectors have equal specificity, so whichever comes last wins.
+ * The focus repaint was silently cancelling the only fill that says "let go
+ * here", leaving a dashed border as the entire signal.
+ */
+.omp-composer__input[data-dropping="true"],
+.omp-composer__input[data-dropping="true"]:focus {
+	border-color: var(--tui-accent);
+	border-style: dashed;
+	background: var(--tui-info-bg);
 }
 
 .omp-composer__row [data-component="button"],
@@ -3388,9 +3426,13 @@ body {
 	background: var(--text-weaker);
 }
 
-/* Wide enough for a repository path to sit on one line. */
+/*
+ * Wide enough for a repository path to sit on one line — which the base 640px
+ * is not. It used to declare exactly the base width, so the modifier was inert
+ * and the option rows still wrapped the paths it was added to keep whole.
+ */
 .omp-modal--wide {
-	width: min(640px, calc(100vw - 16px));
+	width: min(760px, calc(100vw - 16px));
 }
 
 /*
@@ -3453,7 +3495,10 @@ body {
 	--tui-md-heading: var(--text-strong);
 	--tui-md-link: var(--text-interactive-base);
 	--tui-md-list-bullet: var(--text-interactive-base);
-	--tui-md-code: var(--text-strong);
+	/* Not `--text-strong`: that is the modal's own text colour, so a backticked
+	 * span came out identical to the prose around it — same family too, since the
+	 * whole app is monospace. */
+	--tui-md-code: var(--text-interactive-base);
 	--tui-md-code-block: var(--text-base);
 	--tui-md-code-block-border: var(--border-base);
 	--tui-md-quote: var(--text-base);
@@ -3461,6 +3506,13 @@ body {
 	--tui-md-hr: var(--border-base);
 	--tui-border: var(--border-base);
 	--tui-muted: var(--text-base);
+}
+
+/* Says where to go for the actions this screen cannot offer. */
+.omp-screen__hint {
+	align-self: center;
+	color: var(--text-base);
+	font-size: var(--font-size-small);
 }
 
 /* -- context menu --------------------------------------------------------- */
