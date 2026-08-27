@@ -20,11 +20,10 @@ import {
 	type ProjectNode,
 	type SessionNode,
 } from "../projects/discover";
-import type { RpcBridge } from "../rpc/bridge";
 import { exportSession, renameSession } from "../rpc/sessionOps";
 import { isTauri } from "../rpc/transport";
 import { getSnapshot, subscribe, type TabState } from "../shell/activity";
-import { bridgeFor } from "../shell/bridges";
+import { bridgeFor, liveBridgeFor, liveTabs } from "../shell/bridges";
 import { writeClipboard } from "../shell/clipboard";
 import { coalesce } from "../shell/coalesce";
 import { useContextMenu } from "../shell/contextMenu";
@@ -83,12 +82,21 @@ export function Sidebar({
 	 * refresh that starts before the session file is written must not be the last
 	 * one to run, or the list settles on the state it was called about.
 	 */
+	/*
+	 * Which tabs Rust has a process for. Only the menu's labels read this — the
+	 * actions that could do damage re-ask at the moment they act, because a stale
+	 * "no process" is what sends a rename down the throwaway path and puts two
+	 * agents on one session file.
+	 */
+	const [live, setLive] = useState<ReadonlySet<string>>(new Set());
+
 	const refresh = useMemo(
 		() =>
 			coalesce(async () => {
 				if (!isTauri()) return;
 				try {
 					setSessions(await loadSessions());
+					setLive(await liveTabs());
 					setError(null);
 				} catch (cause) {
 					setError(cause instanceof Error ? cause.message : String(cause));
@@ -164,23 +172,18 @@ export function Sidebar({
 			const bridge = bridgeFor(tab?.tabId);
 			const project = session.projectRoot || session.cwd || "";
 
-			/*
-			 * A process, not a tab. `bridgeFor` answers for any mounted session view,
-			 * and a view stays mounted after the pool evicts its sidecar — so "Stop
-			 * the process" offered itself for sessions that had none, and rename and
-			 * export took the live path into a bridge with nothing behind it.
-			 */
-			const status = bridge?.getSnapshot().status;
-			const live = status === "ready" || status === "starting";
+			// The pool's answer, not the bridge's: a background tab's bridge sits at
+			// `idle` while its sidecar is very much alive.
+			const hasProcess = tab !== undefined && live.has(tab.tabId);
 
 			openMenu(
 				event,
 				sessionMenuItems(
-					{ live, hasProject: Boolean(project) },
+					{ live: hasProcess, hasProject: Boolean(project) },
 					{
 						open: () => onOpenSession(session),
 						rename: () => setPrompt({ kind: "rename", session }),
-						exportHtml: () => void exportTranscript(session, live ? bridge : undefined).catch(report),
+						exportHtml: () => void exportTranscript(session, tab?.tabId).catch(report),
 						reveal: () => void revealFolder(project).catch(report),
 						copySessionPath: () => void writeClipboard(session.path).catch(report),
 						copyProjectPath: () => void writeClipboard(project).catch(report),
@@ -190,7 +193,7 @@ export function Sidebar({
 				),
 			);
 		},
-		[openMenu, onOpenSession, tabs, report],
+		[openMenu, onOpenSession, tabs, report, live],
 	);
 
 	const projectMenu = useCallback(
@@ -337,18 +340,16 @@ function RenamePrompt({
 		if (!trimmed || busy) return;
 		setBusy(true);
 		const tab = findOpenTab(tabs, session);
-		// Only a bridge with a process behind it; a mounted view whose sidecar was
-		// evicted still answers `bridgeFor`.
-		const bridge = bridgeFor(tab?.tabId);
-		const status = bridge?.getSnapshot().status;
-		renameSession(
-			{
-				bridge: status === "ready" || status === "starting" ? bridge : undefined,
-				cwd: session.cwd || session.projectRoot || "",
-				sessionPath: session.path,
-			},
-			trimmed,
-		)
+		// Asked at the moment of acting, and asked of Rust. A bridge exists for any
+		// mounted view and sits at `idle` for background tabs, so trusting it here
+		// is what would send this rename into a second process on a live jsonl.
+		liveBridgeFor(tab?.tabId)
+			.then(bridge =>
+				renameSession(
+					{ bridge, cwd: session.cwd || session.projectRoot || "", sessionPath: session.path },
+					trimmed,
+				),
+			)
 			.then(onDone)
 			.catch(cause => {
 				onError(cause);
@@ -651,7 +652,7 @@ async function revealFolder(directory: string): Promise<void> {
  * takes the path and answers with what it actually wrote, which is what gets
  * opened — never the path we asked for.
  */
-async function exportTranscript(session: SessionNode, bridge: RpcBridge | undefined): Promise<void> {
+async function exportTranscript(session: SessionNode, tabId: string | undefined): Promise<void> {
 	const suggested = `${(session.title || "session").replace(/[^\w.-]+/g, "-").slice(0, 60)}.html`;
 	const target = await save({
 		title: "Export transcript",
@@ -660,8 +661,15 @@ async function exportTranscript(session: SessionNode, bridge: RpcBridge | undefi
 	});
 	if (!target) return;
 
+	// Resolved here, not when the menu was drawn: between the two, whether this
+	// session has a process can change, and getting it wrong sends the export to
+	// a second process on a live jsonl.
 	const written = await exportSession(
-		{ bridge, cwd: session.cwd || session.projectRoot || "", sessionPath: session.path },
+		{
+			bridge: await liveBridgeFor(tabId),
+			cwd: session.cwd || session.projectRoot || "",
+			sessionPath: session.path,
+		},
 		target,
 	);
 	await openPath(written);
