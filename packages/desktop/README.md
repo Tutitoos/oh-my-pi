@@ -25,9 +25,10 @@ side panel for changes, files, tasks and subagents.
 - **Everywhere.** A context menu on every surface, keyboard shortcuts by desktop
   convention rather than the TUI's, and native notifications when a turn ends.
 
-Settings, plugins and MCP servers are managed from `/manage`, over short CLI
-invocations rather than the RPC session — none of the 59 RPC commands is about
-configuration.
+Settings, plugins and MCP servers are managed from `/manage`. None of the 45 RPC
+commands is about configuration, so settings and plugins go over short `omp`
+invocations; MCP goes over the session itself, because `/mcp` is a slash command
+and the protocol carries those.
 
 ## Why a sidecar
 
@@ -92,7 +93,7 @@ modal and context menu — its surfaces, its padding rhythm, its
 "one border on the panel, none on its rows". Copy the measurements, not the
 sheet; the radius and shadow they declare are exactly what this app removes.
 
-Buttons keep `data-component="button"` and `data-variant` because 22 call sites
+Buttons keep `data-component="button"` and `data-variant` because 35 call sites
 carry them and the variants still mean the same thing. `data-size` no longer
 does anything — a flat button takes its height from its own padding.
 

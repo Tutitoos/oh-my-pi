@@ -3,8 +3,9 @@ import { isTauri } from "../rpc/transport";
 /**
  * Short-lived `omp <args…>` invocations.
  *
- * None of the RPC protocol's 59 commands touch configuration — no settings, no
- * MCP, no plugins — so management goes through the CLI. It runs in Rust rather
+ * None of the RPC protocol's 45 commands touch configuration — no settings, no
+ * plugins — so management goes through the CLI. MCP is the exception and does
+ * not come through here: `/mcp` is a slash command, so it rides the session. It runs in Rust rather
  * than the webview: granting `shell:allow-execute` would also let the page spawn
  * the long-lived sidecar directly and bypass the relay that owns process
  * lifetime.
