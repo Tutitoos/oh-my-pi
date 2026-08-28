@@ -55,12 +55,17 @@ binary: `sync:sidecar` generates a shim that execs an installed `omp`, and
 `scripts/release.ts` refuses to package with it unless forced, because that
 failure would otherwise be silent.
 
-**A way to drive the app in tests.** Three fixes in the last batch could not be
-verified because the dev binary is not a registered macOS application, so nothing
-can click it. That is why a scope bug survived a fix that was *about* that scope:
-the check that was run proved the permission reached the runtime, not that it
-permitted anything. Until the app can be driven, every permission, clipboard and
-drag-drop fix is an argument rather than a result.
+**A way to drive the app in tests — half done.** `bun run tauri build --debug`
+produces a real `omp Desktop.app`, which is enough for a person (or an agent
+with screen control) to click through, and `bun run smoke` now launches that
+bundle and fails if the process dies, no sidecar appears, or the output carries a
+refusal — the shapes that a tightened CSP, an unparsed capability or an
+unregistered plugin take.
+
+What is still missing is assertions about what is *on screen*. Smoke proves the
+window comes up; it cannot prove a menu opens or a file opens in an editor. Those
+were verified by hand, and they will need doing by hand again after every change
+until something automates them.
 
 **Windows and Linux.** macOS first was deliberate — it bounds where WebKit and
 Chromium disagree. The relay and the protocol client are platform-agnostic; the

@@ -36,7 +36,8 @@
 		"lint": "biome lint .",
 		"fix": "biome check --write --unsafe .",
 		"fmt": "biome format --write .",
-		"release": "bun scripts/release.ts"
+		"release": "bun scripts/release.ts",
+		"smoke": "bun scripts/smoke.ts"
 	},
 	"dependencies": {
 		"@oh-my-pi/collab-web": "workspace:*",
