@@ -16,6 +16,8 @@
 
 - Opening a file in the editor, revealing it in Finder and the OAuth login now work; they were rejected by a missing permission scope and did nothing at all.
 - Renaming or exporting a session that is not open now acts on that session instead of on an empty one, while reporting success.
+- Renaming or exporting a closed session now fails and says so when the throwaway process could not open it, instead of acting on the empty session it booted with and reporting success.
+- Renaming or exporting a session that predates omp recording a working directory no longer dies with a filesystem error.
 - Pressing Escape to dismiss a menu or the expanded composer no longer aborts the running turn.
 - The file tree's context menu now opens.
 - Cut and paste in the text menu now act on the field you opened the menu in.

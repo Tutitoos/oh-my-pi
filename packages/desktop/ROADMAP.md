@@ -56,7 +56,7 @@ that way and are not listed.
   to it, and the transcript is still its own; a prompt sent there appends to the
   same jsonl the tab was showing before eviction.
 
-- [ ] **A3 · The one-shot path never checks whether its `switch_session` worked**
+- [x] **A3 · The one-shot path never checks whether its `switch_session` worked**
   `src/rpc/sessionOps.ts` — `oneshot()` writes the switch frame and the command
   frame together and reads back only the second. A `session_before_switch`
   handler returning false, or a `SESSION_CWD_CHANGE_REJECTED` throw when the
@@ -64,8 +64,13 @@ that way and are not listed.
   child on its own fresh empty session while the command still answers success.
   Callers pass `session.cwd || session.projectRoot || ""`, so a listing without a
   cwd makes the mismatch reachable with no extension installed.
-  **Done when:** a rename against a session whose switch is refused reports the
-  refusal instead of reporting success, and writes nothing.
+  Closed on both sides: `agent_oneshot` now answers one line per awaited id, and
+  the client refuses the command's answer unless the switch that preceded it
+  worked. Both real failure shapes come back as `success: true` carrying
+  `data.cancelled`, which is exactly what reading `success` alone missed.
+  **Consequence worth stating:** a session whose recorded cwd is a symlinked
+  spelling of its real directory now refuses to open rather than renaming the
+  wrong one — correct, but with no workaround from the UI while it is closed.
 
 - [ ] **A4 · A rejected send silently eats the composed message**
   `src/components/composer/useComposerDraft.ts` — `submit` revokes the object

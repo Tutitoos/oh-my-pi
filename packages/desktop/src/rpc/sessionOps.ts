@@ -48,8 +48,13 @@ export async function oneshot<T>(cwd: string, sessionPath: string, command: Reco
 	const switchId = `oneshot-switch-${crypto.randomUUID()}`;
 	const runId = `oneshot-run-${crypto.randomUUID()}`;
 
-	const line = await invoke<string>("agent_oneshot", {
-		cwd,
+	const replies = await invoke<string[]>("agent_oneshot", {
+		// `null`, not `""`. An empty string is a path to `Command::current_dir`,
+		// not "no directory": the child chdirs to "" and the spawn dies with
+		// ENOENT. Sessions written before omp recorded a working directory list
+		// one (they are the `UNGROUPED` bucket in projects/discover.ts), so
+		// renaming any of those failed with a filesystem error.
+		cwd: cwd || null,
 		lines: [
 			// `sessionPath`, not `path`. The server reads `command.sessionPath`
 			// (rpc-types.ts declares it); sending `path` made it `undefined`, so the
@@ -58,13 +63,46 @@ export async function oneshot<T>(cwd: string, sessionPath: string, command: Reco
 			JSON.stringify({ id: switchId, type: "switch_session", sessionPath }),
 			JSON.stringify({ ...command, id: runId }),
 		],
-		expectId: runId,
+		// Both, in this order. Waiting only on the second is what let a switch
+		// that never happened through.
+		expectIds: [switchId, runId],
 		timeoutMs: ONESHOT_TIMEOUT_MS,
 	});
 
-	const frame = JSON.parse(line) as { success?: boolean; error?: string; data?: T };
-	if (frame.success === false) throw new Error(frame.error ?? "the session refused the command");
-	return frame.data as T;
+	return readOneshotReplies<T>(replies);
+}
+
+/** As much of a reply frame as this file has to read. */
+interface OneshotReply {
+	success?: boolean;
+	error?: string;
+	data?: unknown;
+}
+
+/**
+ * Refuse the command's answer unless the switch that preceded it worked.
+ *
+ * A switch that did not happen leaves the throwaway on the fresh empty session
+ * it booted with, and the command that follows then answers `success: true` for
+ * work that landed nowhere. Two ordinary server behaviours reach that state
+ * without ever failing: an extension's `session_before_switch` handler
+ * cancelling, and `switchSession` refusing a cwd change because rpc-mode calls
+ * it with no `onCwdChange`. Both come back as `success: true` carrying
+ * `data.cancelled`, so reading `success` alone is exactly the check that missed
+ * them.
+ *
+ * Positional, not correlated: the relay fills one slot per id in the order the
+ * caller listed them, so `replies[0]` is the switch.
+ */
+export function readOneshotReplies<T>(replies: readonly string[]): T {
+	if (replies.length !== 2) throw new Error(`the session answered ${replies.length} of 2 commands`);
+	const [switched, answer] = replies.map(reply => JSON.parse(reply) as OneshotReply);
+	if (switched.success === false) throw new Error(switched.error ?? "could not open that session");
+	if ((switched.data as { cancelled?: boolean } | undefined)?.cancelled) {
+		throw new Error("the session refused to open, so nothing was changed");
+	}
+	if (answer.success === false) throw new Error(answer.error ?? "the session refused the command");
+	return answer.data as T;
 }
 
 /** Rename, wherever the session happens to live. */

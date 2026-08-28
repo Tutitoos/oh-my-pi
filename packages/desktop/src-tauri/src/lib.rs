@@ -851,16 +851,19 @@ fn delete_session(path: String) -> Result<(), String> {
 /// mid-turn and cost it the turn — a context menu must not be able to do that.
 /// A child that was never registered evicts nothing.
 ///
-/// The caller sends already-encoded NDJSON lines and names the response it is
-/// waiting for; this understands no more of the protocol than the relay does.
+/// The caller sends already-encoded NDJSON lines and names every response it
+/// is waiting for; this understands no more of the protocol than the relay
+/// does. Answers come back in `expect_ids` order, and none come back until
+/// every one of them has: a caller that only hears about its last command
+/// cannot tell whether the ones before it ran.
 #[tauri::command]
 async fn agent_oneshot(
 	app: AppHandle,
 	cwd: Option<String>,
 	lines: Vec<String>,
-	expect_id: String,
+	expect_ids: Vec<String>,
 	timeout_ms: u64,
-) -> Result<String, String> {
+) -> Result<Vec<String>, String> {
 	let mut command = app
 		.shell()
 		.sidecar(SIDECAR_NAME)
@@ -882,9 +885,14 @@ async fn agent_oneshot(
 
 	let deadline = Instant::now() + Duration::from_millis(timeout_ms);
 	let mut pending = String::new();
-	let mut answer: Option<String> = None;
+	// One slot per awaited id, in the caller's order. A caller that only
+	// hears back about its LAST command cannot tell whether the ones before
+	// it ran: `switch_session` answers `cancelled` on two ordinary server
+	// paths, and the rename that followed then landed on the empty session
+	// the child had booted with, reporting success.
+	let mut answers: Vec<Option<String>> = vec![None; expect_ids.len()];
 
-	while Instant::now() < deadline {
+	while answers.iter().any(|answer| answer.is_none()) && Instant::now() < deadline {
 		let left = deadline.saturating_duration_since(Instant::now());
 		let Ok(Some(event)) = tokio::time::timeout(left, rx.recv()).await else { break };
 		let chunk = match event {
@@ -896,20 +904,30 @@ async fn agent_oneshot(
 		while let Some(cut) = pending.find('\n') {
 			let line: String = pending.drain(..=cut).collect();
 			let line = line.trim().to_string();
-			// Match on the correlation id, like every other client of this
-			// protocol: responses are not guaranteed to arrive in order.
-			if !line.is_empty() && line.contains(&format!("\"id\":\"{expect_id}\"")) {
-				answer = Some(line);
-				break;
+			if line.is_empty() {
+				continue;
 			}
-		}
-		if answer.is_some() {
-			break;
+			// Match on the correlation id, like every other client of this
+			// protocol: responses are not guaranteed to arrive in order, so
+			// the switch's reply may land after the command's. First answer
+			// per id wins; a later frame echoing an id cannot overwrite it.
+			let slot = expect_ids
+				.iter()
+				.position(|id| line.contains(&format!("\"id\":\"{id}\"")))
+				.filter(|index| answers[*index].is_none());
+			if let Some(index) = slot {
+				answers[index] = Some(line);
+			}
 		}
 	}
 
 	let _ = child.kill();
-	answer.ok_or_else(|| "the session did not answer in time".to_string())
+	// All or nothing: a partial set means a command never answered, and the
+	// caller cannot act on the ones that did.
+	answers
+		.into_iter()
+		.collect::<Option<Vec<String>>>()
+		.ok_or_else(|| "the session did not answer in time".to_string())
 }
 
 /// An image the user dropped on the window, read for them.

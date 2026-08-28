@@ -12,13 +12,16 @@ import { exportSession, renameSession, SESSION_DETACHED } from "../src/rpc/sessi
  */
 const TARGET = { cwd: "/work", sessionPath: "/sessions/a.jsonl" };
 
+/** What the relay hands back: one line per id the caller waited on. */
+const BOTH_ANSWERED = [JSON.stringify({ success: true, data: {} }), JSON.stringify({ success: true })];
+
 afterEach(() => {
 	vi.restoreAllMocks();
 });
 
 describe("renameSession", () => {
 	test("refuses a session whose process this webview cannot reach", async () => {
-		const invoke = vi.spyOn(core, "invoke").mockResolvedValue(JSON.stringify({ success: true }));
+		const invoke = vi.spyOn(core, "invoke").mockResolvedValue(BOTH_ANSWERED);
 
 		await expect(renameSession({ ...TARGET, process: { kind: "detached" } }, "hola")).rejects.toThrow(
 			SESSION_DETACHED,
@@ -27,7 +30,7 @@ describe("renameSession", () => {
 	});
 
 	test("renames a session with no process through a throwaway child", async () => {
-		const invoke = vi.spyOn(core, "invoke").mockResolvedValue(JSON.stringify({ success: true }));
+		const invoke = vi.spyOn(core, "invoke").mockResolvedValue(BOTH_ANSWERED);
 
 		await renameSession({ ...TARGET, process: { kind: "none" } }, "hola");
 
@@ -40,7 +43,7 @@ describe("renameSession", () => {
 	});
 
 	test("renames through the process that already owns the file", async () => {
-		const invoke = vi.spyOn(core, "invoke").mockResolvedValue(JSON.stringify({ success: true }));
+		const invoke = vi.spyOn(core, "invoke").mockResolvedValue(BOTH_ANSWERED);
 		const named: string[] = [];
 		const bridge = {
 			setSessionName: async (name: string) => void named.push(name),
@@ -57,7 +60,10 @@ describe("exportSession", () => {
 	test("refuses a session whose process this webview cannot reach", async () => {
 		const invoke = vi
 			.spyOn(core, "invoke")
-			.mockResolvedValue(JSON.stringify({ success: true, data: { path: "/tmp/out.html" } }));
+			.mockResolvedValue([
+				JSON.stringify({ success: true }),
+				JSON.stringify({ success: true, data: { path: "/tmp/out.html" } }),
+			]);
 
 		await expect(exportSession({ ...TARGET, process: { kind: "detached" } }, "/tmp/out.html")).rejects.toThrow(
 			SESSION_DETACHED,
