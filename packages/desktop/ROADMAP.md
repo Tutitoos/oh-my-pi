@@ -215,8 +215,9 @@ that way and are not listed.
 
 - [ ] **C5 · No manual pass over a bundle built from current HEAD**
   The pool changes of the last round are compiled and reasoned about, not driven.
-  A bundle from HEAD now builds and launches, and the window reports itself
-  loaded — see C3. What remains is the clicking.
+  A bundle from HEAD builds, launches, reports its window loaded and spawns a
+  sidecar with nothing refused (`bun run smoke --build`, run after the upstream
+  merge). What remains is the clicking, which nothing automates.
   **Done when:** that bundle has been driven once through: opening a file under
   a dot-directory, a fourth tab forcing eviction, a native notification, and
   paste through the context menu.
@@ -260,11 +261,11 @@ that way and are not listed.
   a pure function so it stays testable on a machine whose prebuilt native addon
   predates that crate, which is every machine that cannot build it.
 
-- [ ] **E2 · Review threads left open that later commits closed** — several
+- [x] **E2 · Review threads left open that later commits closed** — several
   threads point at code that has since changed. Resolving them with a pointer to
   the fixing commit is what keeps the remaining open ones meaningful.
-  **Done when:** every thread is either resolved with its commit or still open
-  because it is still true.
+  All eighteen threads were addressed and are resolved, with a comment on the PR
+  mapping each finding to the commit that closed it.
 
 ---
 
