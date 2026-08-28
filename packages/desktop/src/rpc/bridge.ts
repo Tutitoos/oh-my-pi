@@ -225,6 +225,14 @@ export class RpcBridge {
 
 	#seq = 0;
 	#pending = new Map<string, Pending>();
+	/**
+	 * Who is still owed the second answer a `prompt` can give.
+	 *
+	 * Only the newest one is kept: the composer sends one message at a time, and
+	 * a watcher that outlived its send would hand a message back to a composer
+	 * that has moved on to another.
+	 */
+	#lateFailure: { id: string; notify(cause: Error): void } | null = null;
 	#listeners = new Set<() => void>();
 
 	// Mutable interior; `#snapshot` is rebuilt lazily on read.
@@ -243,6 +251,14 @@ export class RpcBridge {
 	#pendingUi: ExtensionUiRequestFrame | null = null;
 	/** Blocking requests that arrived while another was on screen. */
 	#uiQueue: ExtensionUiRequestFrame[] = [];
+	/**
+	 * Deadlines for the questions carrying one, keyed by request id.
+	 *
+	 * The server arms its own timer and, unlike an aborted dialog, lets it expire
+	 * in silence — it resolves the default and forgets the request without ever
+	 * emitting a `cancel`. Nothing else would take the modal down.
+	 */
+	#uiTimers = new Map<string, Timer>();
 	#todoPhases: readonly TodoPhase[] = [];
 	#booted = false;
 	#compaction: CompactionProgress | null = null;
@@ -357,6 +373,7 @@ export class RpcBridge {
 		// A new process cannot answer questions the old one asked.
 		this.#pendingUi = null;
 		this.#uiQueue = [];
+		this.#clearUiTimeouts();
 		// A compaction cannot survive the process that was running it.
 		this.#abandonCompaction();
 		this.#touch();
@@ -534,6 +551,13 @@ export class RpcBridge {
 			if (frame.success === false) {
 				this.#error = frame.error ?? "The agent refused that request.";
 				this.#touch();
+				// The banner can say what went wrong, but only the caller still has
+				// the message the server just refused to take.
+				const late = this.#lateFailure;
+				if (late?.id === frame.id) {
+					this.#lateFailure = null;
+					late.notify(new Error(this.#error));
+				}
 			}
 			return; // otherwise a late reply to a timed-out or abandoned request
 		}
@@ -573,11 +597,7 @@ export class RpcBridge {
 		 */
 		if (frame.method === "cancel") {
 			const target = frame.targetId;
-			this.#uiQueue = this.#uiQueue.filter(queued => queued.id !== target);
-			if (this.#pendingUi?.id === target) {
-				this.#pendingUi = this.#uiQueue.shift() ?? null;
-			}
-			this.#touch();
+			if (typeof target === "string") this.#withdrawUi(target);
 			return;
 		}
 
@@ -597,13 +617,69 @@ export class RpcBridge {
 		 */
 		if (this.#pendingUi) this.#uiQueue.push(frame);
 		else this.#pendingUi = frame;
+		this.#armUiTimeout(frame);
 		this.#touch();
+	}
+
+	/**
+	 * Run the server's own dialog deadline on this side too.
+	 *
+	 * `requestRpcDialog` resolves the default and drops the pending request when
+	 * its timer expires, and — unlike the signal-driven abort beside it — sends
+	 * no `cancel`. The modal would otherwise stay up over a question nobody is
+	 * awaiting: it covers the composer, swallows Escape-to-abort, and every later
+	 * question queues behind it. The deadline rides on the frame so a client can
+	 * match it, and the response union carries `timedOut` for exactly this reply.
+	 *
+	 * Armed on arrival, not on display: a question waiting its turn in the queue
+	 * is already burning the deadline the server started when it asked.
+	 */
+	#armUiTimeout(frame: ExtensionUiRequestFrame): void {
+		const deadline = frame.timeout;
+		if (typeof deadline !== "number") return;
+		const id = frame.id;
+		this.#uiTimers.set(
+			id,
+			setTimeout(() => {
+				this.#uiTimers.delete(id);
+				this.#withdrawUi(id);
+				/*
+				 * Sent, not skipped. The server's timer normally wins — it starts
+				 * before the frame is written — and then drops this frame as an answer
+				 * to an id it no longer holds. When a busy server loop lets ours land
+				 * first, this is what settles its side instead of stranding it.
+				 * Failures are the dead-sidecar case, which needs no banner of its own.
+				 */
+				this.#write({ type: "extension_ui_response", id, cancelled: true, timedOut: true }).catch(() => {});
+			}, deadline),
+		);
+	}
+
+	/** Take a request off the screen or out of the queue, wherever it is sitting. */
+	#withdrawUi(id: string): void {
+		this.#disarmUiTimeout(id);
+		if (this.#pendingUi?.id === id) this.#pendingUi = this.#uiQueue.shift() ?? null;
+		else this.#uiQueue = this.#uiQueue.filter(queued => queued.id !== id);
+		this.#touch();
+	}
+
+	#disarmUiTimeout(id: string): void {
+		const timer = this.#uiTimers.get(id);
+		if (timer === undefined) return;
+		clearTimeout(timer);
+		this.#uiTimers.delete(id);
+	}
+
+	#clearUiTimeouts(): void {
+		for (const timer of this.#uiTimers.values()) clearTimeout(timer);
+		this.#uiTimers.clear();
 	}
 
 	/** Answer the outstanding blocking UI request, then show the next one. */
 	answerUi(response: ExtensionUiAnswer): void {
 		const pending = this.#pendingUi;
 		if (!pending) return;
+		this.#disarmUiTimeout(pending.id);
 		this.#pendingUi = this.#uiQueue.shift() ?? null;
 		this.#touch();
 		// Reported, not discarded: answering a dialog whose sidecar has died
@@ -850,8 +926,16 @@ export class RpcBridge {
 	 * The id is minted here and never reused, so a late response to a timed-out
 	 * request cannot resolve a newer one.
 	 */
-	request<T = unknown>(command: { type: string; [key: string]: unknown }, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<T> {
+	request<T = unknown>(
+		command: { type: string; [key: string]: unknown },
+		timeoutMs = DEFAULT_TIMEOUT_MS,
+		onLateFailure?: (cause: Error) => void,
+	): Promise<T> {
 		const id = `d${++this.#seq}`;
+		// Registered only when one is asked for, and never cleared by the next
+		// request: `get_state` alone would otherwise cancel a prompt's watcher
+		// before the turn it started had the chance to refuse.
+		if (onLateFailure) this.#lateFailure = { id, notify: onLateFailure };
 		const { promise, resolve, reject } = Promise.withResolvers<unknown>();
 
 		const timer = setTimeout(() => {
@@ -885,8 +969,12 @@ export class RpcBridge {
 	 * window between a turn starting and that refresh landing was refused. The
 	 * terminal tags an ordinary Enter the same way, for the same race.
 	 */
-	async prompt(message: string, images?: unknown[]): Promise<void> {
-		await this.request({ type: "prompt", message, images, streamingBehavior: "steer" });
+	async prompt(message: string, images?: unknown[], onLateFailure?: (cause: Error) => void): Promise<void> {
+		await this.request(
+			{ type: "prompt", message, images, streamingBehavior: "steer" },
+			DEFAULT_TIMEOUT_MS,
+			onLateFailure,
+		);
 	}
 
 	async steer(message: string, images?: unknown[]): Promise<void> {

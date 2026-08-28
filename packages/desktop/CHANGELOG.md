@@ -29,6 +29,9 @@
 - Renaming or exporting a session whose process is running but whose view is not open now refuses instead of starting a second agent on the same transcript.
 - "Stop the process" works from Settings and the other non-session screens, where it used to do nothing while the sidecar kept running.
 - The working indicator's dots are round again; the previous fix lost to the flattener on specificity while claiming to have won.
+- A message refused after the agent had already accepted it comes back to the composer instead of vanishing; the reason is shown where you are, including inside the expanded editor.
+- An approval or question the agent has stopped waiting for now closes itself instead of holding the screen and the queue behind it.
+- The editor dialog opens on the document it was asked to edit rather than blank, so submitting untouched no longer replaces that document with nothing.
 - A session whose process dies mid-turn no longer keeps showing as working, blocking the window close and offering Stop where Send belongs.
 - A rename detected on the worktree side is read as a rename instead of producing a phantom file with a truncated name.
 - Opening a session that the agent refuses to switch to now says so, instead of showing that session's name over a different one.

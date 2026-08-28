@@ -46,9 +46,19 @@ export interface DraftContents {
 
 /** Everything `sendDraft` is allowed to touch, so the order can be tested. */
 export interface DraftSink {
-	send(message: string, images: ComposerImage[] | undefined): Promise<void>;
+	/**
+	 * Put the message on the wire.
+	 *
+	 * `refused` is the second answer a prompt can get. The server acknowledges
+	 * the frame and only then starts the turn — it has to, a turn runs for
+	 * minutes — so a refusal raised during turn setup (no model selected, no API
+	 * key for the provider) arrives after this promise has already resolved.
+	 */
+	send(message: string, images: ComposerImage[] | undefined, refused: (cause: Error) => void): Promise<void>;
 	/** Drop exactly what went out, and revoke its previews. */
 	clear(sent: DraftContents): void;
+	/** Put back what `clear` took, for a send that was refused after it. */
+	restore(sent: DraftContents): void;
 	/** Somewhere the user will actually see it — the session's error banner. */
 	reportError(cause: unknown): void;
 }
@@ -73,14 +83,56 @@ export async function sendDraft(message: string, contents: DraftContents, sink: 
 		data: attachment.data,
 		mimeType: attachment.mimeType,
 	}));
+	/*
+	 * Which of the two answers got here first. The refusal can arrive in the
+	 * same batch of frames as the acknowledgement — the relay hands the webview
+	 * a batch and it is read synchronously, a microtask before the `await` below
+	 * resumes — so without this the failed send would still empty the composer,
+	 * and the restore would have found a full box and rightly left it alone.
+	 */
+	let outcome: "sending" | "cleared" | "failed" = "sending";
+	const refused = (cause: Error) => {
+		if (outcome === "failed") return;
+		const cleared = outcome === "cleared";
+		outcome = "failed";
+		// Only if it was actually given up. Beat the clear here and the message
+		// is still in the box, previews and all, with nothing to put back.
+		if (cleared) sink.restore({ ...contents, attachments: revivePreviews(contents.attachments) });
+		sink.reportError(refusal(cause));
+	};
 	try {
-		await sink.send(message, images.length ? images : undefined);
+		await sink.send(message, images.length ? images : undefined, refused);
 	} catch (cause) {
-		const reason = cause instanceof Error ? cause.message : String(cause);
-		sink.reportError(new Error(`Could not send that message, so it is still in the composer: ${reason}`));
+		outcome = "failed";
+		sink.reportError(refusal(cause));
 		return;
 	}
+	if (outcome !== "sending") return;
+	outcome = "cleared";
 	sink.clear(contents);
+}
+
+/** One sentence for both answers: the message did not go, and it is still here. */
+function refusal(cause: unknown): Error {
+	const reason = cause instanceof Error ? cause.message : String(cause);
+	return new Error(`Could not send that message, so it is still in the composer: ${reason}`);
+}
+
+/**
+ * The same attachments, with previews that survived the clear.
+ *
+ * `clear` revoked the object URLs and the `File` they were made from is gone,
+ * so a restored chip would show a broken thumbnail. The base64 the send itself
+ * carried is enough to draw it again as a data URL — which is how the
+ * dropped-path attachments have always made their previews, and needs no
+ * revoking at all.
+ */
+function revivePreviews(attachments: readonly Attachment[]): Attachment[] {
+	return attachments.map(attachment =>
+		attachment.previewUrl.startsWith("data:")
+			? attachment
+			: { ...attachment, previewUrl: `data:${attachment.mimeType};base64,${attachment.data}` },
+	);
 }
 
 /**
@@ -363,7 +415,10 @@ export function useComposerDraft({
 				{ draft, attachments, references },
 				{
 					// While a turn is running, `steer` injects into it; `prompt` queues.
-					send: (text, images) => (streaming ? bridge.steer(text, images) : bridge.prompt(text, images)),
+					// Only `prompt` answers twice: the server awaits `steer` before
+					// replying, so its failures reject this send outright.
+					send: (text, images, refused) =>
+						streaming ? bridge.steer(text, images) : bridge.prompt(text, images, refused),
 					clear: sent => {
 						for (const attachment of sent.attachments) URL.revokeObjectURL(attachment.previewUrl);
 						/*
@@ -378,6 +433,19 @@ export function useComposerDraft({
 						setReferences(current => current.filter(path => !sentPaths.has(path)));
 						setNotice(null);
 						setExpanded(false);
+					},
+					restore: sent => {
+						/*
+						 * Into an empty box only. Anything typed since the send is the
+						 * user's own and outranks a message they have already watched
+						 * leave — the terminal draws the same line when it hands back a
+						 * prompt the session dropped (`#restoreDroppedPrompt`).
+						 */
+						setDraft(current => (current === "" ? sent.draft : current));
+						// Additive, mirroring `clear`: what was dropped on the window
+						// since belongs to the next message and stays with it.
+						setAttachments(current => [...sent.attachments, ...current]);
+						setReferences(current => [...sent.references, ...current]);
 					},
 					reportError: cause => {
 						/*

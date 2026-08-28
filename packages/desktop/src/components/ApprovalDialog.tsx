@@ -17,10 +17,18 @@ import { useEscape } from "../shell/useEscape";
  * safety check.
  */
 export function ApprovalDialog({ request, bridge }: { request: ExtensionUiRequestFrame; bridge: RpcBridge }) {
-	const [draft, setDraft] = useState("");
+	const [draft, setDraft] = useState(request.prefill ?? "");
 
-	// A fresh request must not inherit the previous one's draft.
-	useEffect(() => setDraft(""), [request.id]);
+	/*
+	 * A fresh request must not inherit the previous one's draft — but an `editor`
+	 * request arrives carrying the document it wants edited (`/review`'s custom
+	 * mode sends "Review the following:\n\n"), so the reset seeds from `prefill`
+	 * rather than blanking. Blanking made Submit answer "" over the caller's text.
+	 *
+	 * `request.id` stays in the deps because two consecutive requests can carry the
+	 * same prefill (both absent, say), and typing still must not cross between them.
+	 */
+	useEffect(() => setDraft(request.prefill ?? ""), [request.id, request.prefill]);
 
 	/*
 	 * Numbers pick, arrows walk. The rows print the same number, so the two never
@@ -52,8 +60,9 @@ export function ApprovalDialog({ request, bridge }: { request: ExtensionUiReques
 		return () => document.removeEventListener("keydown", onKey);
 	}, [bridge, request.id, request.method, request.options]);
 
-	// The server resolves to a default when its own timeout fires, so Escape
-	// only needs to communicate intent, not race it.
+	// The server resolves to a default when its own timeout fires — but it emits
+	// no `cancel` when it does, so the bridge runs that same deadline and
+	// withdraws the request. Escape only communicates intent, it does not race it.
 	useEscape(
 		useCallback(
 			(event: KeyboardEvent) => {

@@ -62,6 +62,13 @@ export interface ExtensionUiRequestFrame {
 	title?: string;
 	message?: string;
 	placeholder?: string;
+	/*
+	 * `editor` only, and not a placeholder: the document the caller handed over to
+	 * be edited. `/review`'s custom mode sends its scaffold here and an extension
+	 * sends the text it is proposing, so a dialog that ignores it answers "" over
+	 * the caller's own content.
+	 */
+	prefill?: string;
 	options?: string[];
 	optionDetails?: Array<{ description?: string }>;
 	/*

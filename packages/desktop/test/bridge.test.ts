@@ -1137,15 +1137,20 @@ describe("RpcBridge — a prompt that lands mid-turn", () => {
 		expect(JSON.parse(transport.sent[0])).toMatchObject({ type: "prompt", streamingBehavior: "steer" });
 	});
 
-	test("a failure arriving after the acknowledgement is not dropped in silence", async () => {
+	test("a failure arriving after the acknowledgement reaches the banner and the sender", async () => {
 		const { transport, bridge } = await connected();
-		const sent = bridge.prompt("ship it");
+		const refusals: string[] = [];
+		const sent = bridge.prompt("ship it", undefined, cause => refusals.push(cause.message));
 		await settle();
 
 		// The handler acknowledges the frame and only then runs the turn, so both
 		// of these carry the same id and the second one has nothing to settle.
 		transport.frames({ type: "response", id: transport.idOf(0), command: "prompt", success: true });
 		await sent;
+		// Whatever the client asks in the meantime mints its own id and must not
+		// stand in for the prompt's still-unanswered turn.
+		void bridge.getState();
+		await settle();
 		transport.frames({
 			type: "response",
 			id: transport.idOf(0),
@@ -1156,6 +1161,39 @@ describe("RpcBridge — a prompt that lands mid-turn", () => {
 		await settle();
 
 		expect(bridge.getSnapshot().error).toBe("No model selected");
+		// The banner can say what went wrong; only the caller still holds the
+		// message the server refused to take.
+		expect(refusals).toEqual(["No model selected"]);
+	});
+
+	test("a refusal batched with the acknowledgement is seen before the send resolves", async () => {
+		const { transport, bridge } = await connected();
+		const order: string[] = [];
+		const sent = bridge.prompt("ship it", undefined, () => order.push("refused")).then(() => order.push("resolved"));
+		await settle();
+
+		// One relay batch carrying both answers, read synchronously by the webview.
+		transport.frames(
+			{ type: "response", id: transport.idOf(0), command: "prompt", success: true },
+			{ type: "response", id: transport.idOf(0), command: "prompt", success: false, error: "No model selected" },
+		);
+		await sent;
+
+		expect(order).toEqual(["refused", "resolved"]);
+	});
+
+	test("another command failing late is not mistaken for the prompt's refusal", async () => {
+		const { transport, bridge } = await connected();
+		const refusals: string[] = [];
+		const sent = bridge.prompt("ship it", undefined, cause => refusals.push(cause.message));
+		await settle();
+		transport.frames({ type: "response", id: transport.idOf(0), command: "prompt", success: true });
+		await sent;
+		transport.frames({ type: "response", id: "d999", command: "bash", success: false, error: "boom" });
+		await settle();
+
+		expect(refusals).toEqual([]);
+		expect(bridge.getSnapshot().error).toBe("boom");
 	});
 });
 
@@ -1206,5 +1244,62 @@ describe("RpcBridge — a dead process is not mid-turn", () => {
 		await settle();
 		expect(bridge.getSnapshot().status).toBe("error");
 		expect(bridge.getSnapshot().state?.isStreaming).toBe(false);
+	});
+});
+
+/**
+ * A deadline the server does not police once it has expired.
+ *
+ * `requestRpcDialog` resolves its default on timeout, drops the pending request
+ * and sends NOTHING — the `cancel` frame is the abort path, not the timeout
+ * path. The deadline rides on the request frame precisely so the client can run
+ * it, and nothing here did: the modal stayed up over a question the server had
+ * stopped waiting for, holding the composer and the queue behind it. `login`
+ * ships a 600s one, so this is not extension-only.
+ */
+describe("RpcBridge — a question the server stops waiting for", () => {
+	const ask = (id: string, timeout?: number) => ({
+		type: "extension_ui_request",
+		id,
+		method: "select",
+		title: id,
+		options: ["a", "b"],
+		...(timeout === undefined ? {} : { timeout }),
+	});
+
+	const responses = (transport: { sent: string[] }) =>
+		transport.sent.map(line => JSON.parse(line)).filter(frame => frame.type === "extension_ui_response");
+
+	test("a dialog carrying a deadline takes itself down when the deadline passes", async () => {
+		const { transport, bridge } = await connected();
+		transport.frames(ask("q1", 20));
+		await settle();
+		expect(bridge.getSnapshot().pendingUi?.id).toBe("q1");
+
+		await new Promise(resolve => setTimeout(resolve, 60));
+		expect(bridge.getSnapshot().pendingUi).toBeNull();
+		expect(responses(transport)).toEqual([
+			{ type: "extension_ui_response", id: "q1", cancelled: true, timedOut: true },
+		]);
+	});
+
+	test("the deadline runs while a question waits its turn", async () => {
+		const { transport, bridge } = await connected();
+		transport.frames(ask("q1"), ask("q2", 20));
+		await settle();
+		await new Promise(resolve => setTimeout(resolve, 60));
+
+		bridge.answerUi({ id: "q1", value: "a" });
+		await settle();
+		// q2 expired unseen rather than taking the screen after q1 was answered.
+		expect(bridge.getSnapshot().pendingUi).toBeNull();
+	});
+
+	test("a question with no deadline waits as long as the person does", async () => {
+		const { transport, bridge } = await connected();
+		transport.frames(ask("q1"));
+		await settle();
+		await new Promise(resolve => setTimeout(resolve, 60));
+		expect(bridge.getSnapshot().pendingUi?.id).toBe("q1");
 	});
 });

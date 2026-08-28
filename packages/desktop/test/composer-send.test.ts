@@ -22,9 +22,15 @@ function contents(overrides: Partial<DraftContents> = {}): DraftContents {
 
 function recorder(send: DraftSink["send"]) {
 	const cleared: DraftContents[] = [];
+	const restored: DraftContents[] = [];
 	const reported: unknown[] = [];
-	const sink: DraftSink = { send, clear: sent => cleared.push(sent), reportError: cause => reported.push(cause) };
-	return { sink, cleared, reported };
+	const sink: DraftSink = {
+		send,
+		clear: sent => cleared.push(sent),
+		restore: sent => restored.push(sent),
+		reportError: cause => reported.push(cause),
+	};
+	return { sink, cleared, restored, reported };
 }
 
 describe("sendDraft", () => {
@@ -68,5 +74,66 @@ describe("sendDraft", () => {
 
 		expect(seen[0]).toEqual([{ type: "image", data: "AA==", mimeType: "image/png" }]);
 		expect(seen[1]).toBeUndefined();
+	});
+});
+
+/**
+ * `prompt` is answered twice: the server acknowledges the frame and only then
+ * starts the turn, so a turn that will not start — no model selected, no API
+ * key for the provider — refuses on a second frame that arrives after the send
+ * has already resolved. The composer is the only thing still holding the
+ * message at that point.
+ */
+describe("a prompt refused after its acknowledgement", () => {
+	test("hands the message back when the draft has already been given up", async () => {
+		let refuse: ((cause: Error) => void) | undefined;
+		const { sink, cleared, restored, reported } = recorder(async (_message, _images, refused) => {
+			refuse = refused;
+		});
+		const draft = contents();
+
+		await sendDraft("ship it", draft, sink);
+		expect(cleared).toEqual([draft]);
+
+		refuse?.(new Error("No model selected"));
+
+		expect(restored).toHaveLength(1);
+		expect(restored[0]?.draft).toBe("ship it");
+		expect(restored[0]?.references).toEqual(["/tmp/notes.md"]);
+		// The object URL went with the clear, so the chip comes back on the base64
+		// the send itself carried.
+		expect(restored[0]?.attachments[0]?.previewUrl).toBe("data:image/png;base64,AA==");
+		expect(String(reported[0])).toContain("No model selected");
+		expect(String(reported[0])).toContain("still in the composer");
+	});
+
+	test("leaves it where it is when the refusal arrives before the clear", async () => {
+		// Both frames can reach the webview in one relay batch, which is read
+		// synchronously — the refusal then lands a microtask before the send's
+		// own resolution is observed.
+		const { sink, cleared, restored, reported } = recorder(async (_message, _images, refused) => {
+			refused(new Error("No API key found for anthropic"));
+		});
+
+		await sendDraft("ship it", contents(), sink);
+
+		expect(cleared).toHaveLength(0);
+		expect(restored).toHaveLength(0);
+		expect(reported).toHaveLength(1);
+	});
+
+	test("says nothing twice when the send had already failed on the wire", async () => {
+		let refuse: ((cause: Error) => void) | undefined;
+		const { sink, cleared, restored, reported } = recorder(async (_message, _images, refused) => {
+			refuse = refused;
+			throw new Error("session suspended to free a slot");
+		});
+
+		await sendDraft("ship it", contents(), sink);
+		refuse?.(new Error("No model selected"));
+
+		expect(cleared).toHaveLength(0);
+		expect(restored).toHaveLength(0);
+		expect(reported).toHaveLength(1);
 	});
 });

@@ -65,4 +65,17 @@ describe("ApprovalDialog", () => {
 		expect(markup).toContain(">2<");
 		expect(markup).toContain("Leave plan mode and carry it out");
 	});
+
+	test("an editor opens on the document it was handed, on the very first paint", () => {
+		// `/review`'s custom mode sends this scaffold as `prefill`. Asserted through
+		// static markup precisely because that render never runs an effect: it pins
+		// the initial state, so a first frame with an empty box cannot come back.
+		const markup = render({
+			method: "editor",
+			title: "Custom review instructions",
+			prefill: "Review the following:\n\n",
+		});
+
+		expect(markup).toContain(">Review the following:\n\n</textarea>");
+	});
 });
