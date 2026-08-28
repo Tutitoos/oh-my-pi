@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { type MenuItem, tidy, useContextMenu } from "../shell/contextMenu";
+import { useEscape } from "../shell/useEscape";
 
 /** Kept off the window edge by this much when the menu has to be nudged. */
 const MARGIN = 8;
@@ -80,11 +81,8 @@ export function ContextMenu() {
 	useEffect(() => {
 		if (!request) return;
 		const onKey = (event: KeyboardEvent) => {
-			if (event.key === "Escape") {
-				// Claim it, or the same press aborts the running turn.
-				event.preventDefault();
-				return close();
-			}
+			// Escape is not here: it goes through `useEscape` below, with every
+			// other overlay's, so the target is decided in one place.
 			if (usable.length === 0) return;
 			const here = usable.findIndex(entry => entry.index === active);
 			if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -104,21 +102,22 @@ export function ContextMenu() {
 				if (item) pick(item);
 			}
 		};
-		/*
-		 * `document`, not `window`, and that is the whole fix.
-		 *
-		 * `preventDefault` only suppresses listeners that run *after* it, and
-		 * listeners on one target fire in registration order. The turn's abort
-		 * handler (routes/session.tsx) binds on `window` the moment streaming
-		 * starts — always before an overlay can exist — so an overlay that also
-		 * binds on `window` runs second and the turn is already dead. `document` is
-		 * strictly earlier than `window` in the bubble path, which is why the
-		 * overlays that got this right (ModelPicker, ApprovalModeBadge,
-		 * CompactDialog) all bind there.
-		 */
+		// The same target as the Escape hook, for the same reason it gives.
 		document.addEventListener("keydown", onKey);
 		return () => document.removeEventListener("keydown", onKey);
-	}, [request, close, active, items, usable, pick]);
+	}, [request, active, items, usable, pick]);
+
+	useEscape(
+		useCallback(
+			(event: KeyboardEvent) => {
+				if (!request) return;
+				// Claim it, or the same press aborts the running turn.
+				event.preventDefault();
+				close();
+			},
+			[request, close],
+		),
+	);
 
 	if (!request) return null;
 

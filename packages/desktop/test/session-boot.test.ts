@@ -99,6 +99,33 @@ describe("bootSession — a tab keeps its session across processes", () => {
 	 * the old transcript was still on screen, and the next prompt went into a
 	 * different jsonl from the one being displayed.
 	 */
+	/*
+	 * A refusal is not a failure, and that is what made it dangerous. An extension
+	 * vetoing `session_before_switch`, or a cwd the session disagrees with, both
+	 * come back as a RESOLVED `{ cancelled: true }` — so awaiting and discarding
+	 * the answer read them as success. The process stayed on the throwaway session
+	 * it booted with while the tab showed the one that was asked for, and the next
+	 * prompt was written to the throwaway.
+	 */
+	test("a refused switch is reported, not taken for success", async () => {
+		const transport = new ScriptedTransport();
+		const bridge = new RpcBridge("new:vetoed", transport);
+		rememberSession("new:vetoed", "/sessions/wanted.jsonl");
+
+		const booting = bootSession(bridge, {});
+		await answerOpeningQueries(
+			transport,
+			sessionState({ sessionId: "throwaway", sessionFile: "/sessions/throwaway.jsonl" }),
+		);
+
+		expect(transport.last("switch_session")?.sessionPath).toBe("/sessions/wanted.jsonl");
+		transport.reply("switch_session", { cancelled: true });
+		await booting;
+		await settle();
+
+		expect(bridge.getSnapshot().error).toContain("refused");
+	});
+
 	test("a respawned process is pointed back at the session the tab was on", async () => {
 		const transport = new ScriptedTransport();
 		const bridge = new RpcBridge("new:evicted", transport);

@@ -1,6 +1,7 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useRef } from "react";
 import { isTauri } from "../../rpc/transport";
+import { useEscape } from "../../shell/useEscape";
 import { ComposerChips, ComposerSlash } from "./ComposerChips";
 import { ComposerEditor } from "./ComposerEditor";
 import type { ComposerDraft } from "./useComposerDraft";
@@ -29,27 +30,19 @@ export function ComposerModal({ composer }: { composer: ComposerDraft }) {
 	 * focusable — and focus falls to `<body>`, from where Escape reached nothing
 	 * here and went straight to the abort-the-turn listener in session.tsx.
 	 */
-	useEffect(() => {
-		const onKey = (event: KeyboardEvent) => {
-			if (event.key !== "Escape" || event.defaultPrevented) return;
-			event.preventDefault();
-			composer.setExpanded(false);
-		};
-		/*
-		 * `document`, not `window`, and that is the whole fix.
-		 *
-		 * `preventDefault` only suppresses listeners that run *after* it, and
-		 * listeners on one target fire in registration order. The turn's abort
-		 * handler (routes/session.tsx) binds on `window` the moment streaming
-		 * starts — always before an overlay can exist — so an overlay that also
-		 * binds on `window` runs second and the turn is already dead. `document` is
-		 * strictly earlier than `window` in the bubble path, which is why the
-		 * overlays that got this right (ModelPicker, ApprovalModeBadge,
-		 * CompactDialog) all bind there.
-		 */
-		document.addEventListener("keydown", onKey);
-		return () => document.removeEventListener("keydown", onKey);
-	}, [composer.setExpanded]);
+	const setExpanded = composer.setExpanded;
+	useEscape(
+		useCallback(
+			(event: KeyboardEvent) => {
+				// Deferring to whoever claimed it first: a context menu opened over
+				// this dialog should close itself, not the dialog under it.
+				if (event.defaultPrevented) return;
+				event.preventDefault();
+				setExpanded(false);
+			},
+			[setExpanded],
+		),
+	);
 
 	const pickFiles = useCallback(async () => {
 		if (!isTauri()) return;

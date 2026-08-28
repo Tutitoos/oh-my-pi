@@ -1,7 +1,8 @@
 import { Markdown } from "@oh-my-pi/collab-web/src/components/transcript/Markdown";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { RpcBridge } from "../rpc/bridge";
 import type { ExtensionUiRequestFrame } from "../rpc/protocol";
+import { useEscape } from "../shell/useEscape";
 
 /**
  * Renders the blocking half of the Extension UI sub-protocol.
@@ -53,18 +54,18 @@ export function ApprovalDialog({ request, bridge }: { request: ExtensionUiReques
 
 	// The server resolves to a default when its own timeout fires, so Escape
 	// only needs to communicate intent, not race it.
-	useEffect(() => {
-		const onKey = (event: KeyboardEvent) => {
-			if (event.key !== "Escape") return;
-			// Claiming the key matters even though session.tsx already stands down
-			// for `pendingUi`: it is what stops any other Escape consumer added
-			// later from acting on the same press.
-			event.preventDefault();
-			bridge.answerUi({ id: request.id, cancelled: true });
-		};
-		document.addEventListener("keydown", onKey);
-		return () => document.removeEventListener("keydown", onKey);
-	}, [bridge, request.id]);
+	useEscape(
+		useCallback(
+			(event: KeyboardEvent) => {
+				// Claiming the key matters even though session.tsx already stands
+				// down for `pendingUi`: it is what stops any other Escape consumer
+				// added later from acting on the same press.
+				event.preventDefault();
+				bridge.answerUi({ id: request.id, cancelled: true });
+			},
+			[bridge, request.id],
+		),
+	);
 
 	const title = request.title ?? defaultTitle(request.method);
 

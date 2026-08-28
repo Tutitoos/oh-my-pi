@@ -125,7 +125,22 @@ export async function bootSession(bridge: RpcBridge, options: { sessionPath?: st
 		current: state?.sessionFile,
 	});
 	if (target) {
-		await bridge.switchSession(target).catch(reportBootFailure(bridge, "Opening this session"));
+		/*
+		 * A refusal is not a failure, and that is exactly what made it dangerous.
+		 * `session_before_switch` can veto, and a cwd the session does not agree
+		 * with is refused too; both come back as a resolved `{ cancelled: true }`
+		 * rather than a throw, so awaiting-and-discarding read them as success. The
+		 * process then stays on the throwaway session it booted with while the tab
+		 * shows the one that was asked for — and the next prompt is written to the
+		 * throwaway. `readOneshotReplies` already refuses on this exact shape for
+		 * the unmounted path; this is the mounted one agreeing with it.
+		 */
+		const switched = await bridge
+			.switchSession(target)
+			.catch(reportBootFailure(bridge, "Opening this session"));
+		if (switched?.cancelled) {
+			bridge.reportError(new Error("Opening this session was refused, so this tab is not showing it."));
+		}
 	} else if (handle?.resumed) {
 		/*
 		 * A re-attached process has a conversation and this bridge has an empty

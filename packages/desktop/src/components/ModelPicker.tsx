@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { RpcBridge } from "../rpc/bridge";
 import type { RpcSessionState } from "../rpc/protocol";
 import { thinkingLevels } from "../rpc/thinking";
+import { useEscape } from "../shell/useEscape";
 
 /**
  * Model and thinking-level selector.
@@ -33,19 +34,21 @@ export function ModelPicker({ bridge, state }: { bridge: RpcBridge; state: RpcSe
 		const onDown = (event: MouseEvent) => {
 			if (!root.current?.contains(event.target as Node)) setOpen(false);
 		};
-		const onKey = (event: KeyboardEvent) => {
-			if (event.key !== "Escape") return;
-			// Same reason as the palette: closing a menu should not abort a turn.
-			event.preventDefault();
-			setOpen(false);
-		};
 		document.addEventListener("mousedown", onDown);
-		document.addEventListener("keydown", onKey);
-		return () => {
-			document.removeEventListener("mousedown", onDown);
-			document.removeEventListener("keydown", onKey);
-		};
+		return () => document.removeEventListener("mousedown", onDown);
 	}, [open]);
+
+	useEscape(
+		useCallback(
+			(event: KeyboardEvent) => {
+				if (!open) return;
+				// Same reason as the palette: closing a menu should not abort a turn.
+				event.preventDefault();
+				setOpen(false);
+			},
+			[open],
+		),
+	);
 
 	const choose = useCallback(
 		async (provider: string, id: string) => {

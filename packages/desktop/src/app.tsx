@@ -281,7 +281,14 @@ export function App() {
 	// on disk — but that turn can be a lot of work.
 	useCloseGuard(
 		anyTabBusy,
-		useCallback(() => new Promise<boolean>(resolve => setClosePrompt(() => resolve)), []),
+		useCallback(() => {
+			// `withResolvers` because the resolver outlives this call: the dialog
+			// answers it from a click, later. AGENTS.md asks for it over `new
+			// Promise` everywhere, and this is the shape it is asking for.
+			const { promise, resolve } = Promise.withResolvers<boolean>();
+			setClosePrompt(() => resolve);
+			return promise;
+		}, []),
 	);
 
 	const context: ShellContext = {

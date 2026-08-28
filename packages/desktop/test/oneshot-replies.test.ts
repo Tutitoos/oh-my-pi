@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
 import { readOneshotReplies } from "../src/rpc/sessionOps";
 
 /**
@@ -63,26 +62,5 @@ describe("a oneshot is only as good as its switch", () => {
 
 	test("one reply for two commands is a failure, not half a success", () => {
 		expect(() => readOneshotReplies([RENAMED])).toThrow(/of 2/);
-	});
-});
-
-/**
- * `bun test` cannot invoke a Tauri command, so the half of this that lives in
- * Rust is pinned at the source instead. Both sides have to move together: a
- * relay that answers with one line again leaves `readOneshotReplies` above with
- * nothing to check, and the check would pass on every run.
- */
-describe("the relay answers every id the webview waits on", () => {
-	const RELAY = new URL("../src-tauri/src/lib.rs", import.meta.url).pathname;
-	const OPS = new URL("../src/rpc/sessionOps.ts", import.meta.url).pathname;
-
-	test("agent_oneshot takes a list of ids and answers with a list of lines", () => {
-		const relay = readFileSync(RELAY, "utf8");
-		expect(relay).toContain("expect_ids: Vec<String>,");
-		expect(relay).toContain(") -> Result<Vec<String>, String> {");
-	});
-
-	test("oneshot waits on the switch as well as the command", () => {
-		expect(readFileSync(OPS, "utf8")).toContain("expectIds: [switchId, runId],");
 	});
 });

@@ -641,6 +641,17 @@ fn agent_start(
 		return Ok(AgentHandle { pid: winner_pid, resumed: true, prewarmed: false });
 	}
 
+	/*
+	 * And check the ceiling again, because the capacity test above ran before a
+	 * spawn that takes seconds. Two `agent_start` calls for DIFFERENT tabs both
+	 * passed it while the pool held two, both spawned, and both landed here — the
+	 * identity check above only catches the same tab racing itself, so the pool
+	 * came out at four. Evict rather than refuse: the tab was asked for, and the
+	 * session that loses its process keeps its transcript and respawns on demand.
+	 */
+	if pool.sessions.len() >= MAX_LIVE_SESSIONS {
+		evict_lru(&mut pool, &tab_id);
+	}
 	pool.sessions.insert(tab_id.clone(), Session { child, pid, sink: Arc::clone(&sink), activity });
 	trim_prewarm(&mut pool);
 	drop(pool);

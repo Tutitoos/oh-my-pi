@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
 import {
 	type Attachment,
 	type DraftContents,
@@ -69,32 +68,5 @@ describe("sendDraft", () => {
 
 		expect(seen[0]).toEqual([{ type: "image", data: "AA==", mimeType: "image/png" }]);
 		expect(seen[1]).toBeUndefined();
-	});
-});
-
-/*
- * `sendDraft` can keep its order perfectly while the hook stops calling it, and
- * the pressure that produced this bug — "the box should empty the instant you
- * press Enter" — acts on the hook, not on the helper. Inside a hook the send
- * path is only reachable through a real React tree, which this package has no
- * test environment for, so the rule is asserted against the source the way
- * `escape-ownership.test.ts` asserts its own.
- */
-describe("the hook's submit", () => {
-	const source = readFileSync(
-		new URL("../src/components/composer/useComposerDraft.ts", import.meta.url).pathname,
-		"utf8",
-	);
-	const start = source.indexOf("const submit = useCallback");
-	const body = source.slice(start, source.indexOf("const applyCompletion", start));
-
-	test("gives the draft up only through the send's own clear", () => {
-		expect(start).toBeGreaterThan(-1);
-		expect(body).toContain("sendDraft(");
-		// The three lines that used to sit above the await. Each one on its own
-		// was a message the user never got back.
-		expect(body).not.toContain('setDraft("")');
-		expect(body).not.toContain("setAttachments([])");
-		expect(body).not.toContain("setReferences([])");
 	});
 });

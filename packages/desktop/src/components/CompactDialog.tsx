@@ -1,5 +1,6 @@
-import { useEffect } from "react";
+import { useCallback } from "react";
 import { compactTokens } from "../rpc/compaction";
+import { useEscape } from "../shell/useEscape";
 
 /**
  * Confirms a compaction before it runs.
@@ -27,15 +28,15 @@ export function CompactDialog({
 }) {
 	// Escape closes it, and `preventDefault` keeps the session's own handler
 	// from reading the same key as "abort the turn".
-	useEffect(() => {
-		const onKey = (event: KeyboardEvent) => {
-			if (event.key !== "Escape") return;
-			event.preventDefault();
-			onCancel();
-		};
-		document.addEventListener("keydown", onKey);
-		return () => document.removeEventListener("keydown", onKey);
-	}, [onCancel]);
+	useEscape(
+		useCallback(
+			(event: KeyboardEvent) => {
+				event.preventDefault();
+				onCancel();
+			},
+			[onCancel],
+		),
+	);
 
 	return (
 		<div className="omp-backdrop" role="dialog" aria-modal="true" aria-label="Compact this session">
