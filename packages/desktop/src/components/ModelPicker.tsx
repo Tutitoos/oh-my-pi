@@ -54,6 +54,13 @@ export function ModelPicker({ bridge, state }: { bridge: RpcBridge; state: RpcSe
 				await bridge.setModel(provider, id);
 				await bridge.getState().catch(() => {});
 				setOpen(false);
+			} catch (cause) {
+				/*
+				 * The menu stays open on the old model, which is honest but mute —
+				 * and the rejection was otherwise unhandled, which in dev is an
+				 * overlay and in a packaged webview is nothing at all.
+				 */
+				bridge.reportError(cause);
 			} finally {
 				setBusy(false);
 			}
@@ -67,6 +74,8 @@ export function ModelPicker({ bridge, state }: { bridge: RpcBridge; state: RpcSe
 			try {
 				await bridge.setThinkingLevel(level);
 				await bridge.getState().catch(() => {});
+			} catch (cause) {
+				bridge.reportError(cause);
 			} finally {
 				setBusy(false);
 			}

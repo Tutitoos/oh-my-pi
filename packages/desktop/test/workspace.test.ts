@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { buildTree } from "../src/components/FileTree";
-import { parseUnifiedDiff, shellQuote } from "../src/workspace/git";
+import { RpcBridge } from "../src/rpc/bridge";
+import type { AgentHandle, PoolStatus, RelayEvent, Transport } from "../src/rpc/transport";
+import { fileDiff, parseUnifiedDiff, rawFileDiff, shellQuote } from "../src/workspace/git";
 
 describe("unified diff parsing", () => {
 	test("tracks line numbers across a hunk", () => {
@@ -133,5 +135,84 @@ describe("file tree", () => {
 
 	test("empty input yields an empty root", () => {
 		expect(buildTree([]).children.size).toBe(0);
+	});
+});
+
+/**
+ * Truncation is not a rendering problem, it is a correctness one.
+ *
+ * The shell caps how much a command returns and elides the middle. What comes
+ * back still parses as a diff — header, hunks, the lot — so `git apply` accepts
+ * it and writes the wrong file. The flag has been on the response type since the
+ * beginning and nothing read it, which is the same shape of defect as the four
+ * field-name mismatches this package has already had.
+ */
+describe("truncated git output", () => {
+	/** The relay's surface is small enough to stand in for structurally. */
+	function scriptedBridge(result: { output: string; exitCode: number; truncated: boolean }): {
+		bridge: RpcBridge;
+		transport: ScriptedTransport;
+	} {
+		const transport = new ScriptedTransport(result);
+		return { bridge: new RpcBridge("tab", transport), transport };
+	}
+
+	class ScriptedTransport implements Transport {
+		#emit: ((event: RelayEvent) => void) | null = null;
+		constructor(private readonly result: { output: string; exitCode: number; truncated: boolean }) {}
+
+		async start(_tabId: string, onEvent: (event: RelayEvent) => void): Promise<AgentHandle> {
+			this.#emit = onEvent;
+			return { pid: 1, resumed: false, prewarmed: false };
+		}
+
+		async send(_tabId: string, line: string): Promise<void> {
+			const { id } = JSON.parse(line) as { id: string };
+			// Answer on the next tick, the way the relay does.
+			queueMicrotask(() => {
+				this.#emit?.({
+					event: "frames",
+					data: {
+						tabId: "tab",
+						lines: [JSON.stringify({ type: "response", id, success: true, data: this.result })],
+					},
+				});
+			});
+		}
+
+		async suspend(): Promise<void> {}
+		async kill(): Promise<void> {}
+		async poolStatus(): Promise<PoolStatus> {
+			return { live: 1, maxLive: 3, prewarmReady: false, tabs: ["tab"] };
+		}
+	}
+
+	test("refuses to hand a clipped diff to the clipboard", async () => {
+		const { bridge } = scriptedBridge({
+			output: "diff --git a/a b/a\n@@ -1 +1 @@\n-x\n+y\n",
+			exitCode: 0,
+			truncated: true,
+		});
+		await bridge.start();
+		await expect(rawFileDiff(bridge, "/repo", "a")).rejects.toThrow(/too large to copy/);
+	});
+
+	test("hands over a complete diff unchanged", async () => {
+		const raw = "diff --git a/a b/a\n@@ -1 +1 @@\n-x\n+y\n";
+		const { bridge } = scriptedBridge({ output: raw, exitCode: 0, truncated: false });
+		await bridge.start();
+		expect(await rawFileDiff(bridge, "/repo", "a")).toBe(raw.trim());
+	});
+
+	test("carries the flag out of fileDiff instead of dropping it", async () => {
+		const { bridge } = scriptedBridge({
+			output: "diff --git a/a b/a\n@@ -1 +1 @@\n-x\n+y\n",
+			exitCode: 0,
+			truncated: true,
+		});
+		await bridge.start();
+		const listing = await fileDiff(bridge, "/repo", "a");
+		expect(listing.truncated).toBe(true);
+		expect(listing.diffs).toHaveLength(1);
 	});
 });

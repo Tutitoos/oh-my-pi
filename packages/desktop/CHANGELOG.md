@@ -10,6 +10,7 @@
 - Plan mode is usable from the app, and its approval dialog shows the plan rather than asking you to approve a title.
 - Compaction confirms before it runs, reports progress, can be cancelled, and leaves a record in the transcript.
 - Starting a chat asks which project, listing the ones already in the sidebar.
+- Native notifications when a turn ends or an approval is waiting, and clicking one brings that session forward.
 
 ### Fixed
 
@@ -18,6 +19,12 @@
 - Pressing Escape to dismiss a menu or the expanded composer no longer aborts the running turn.
 - The file tree's context menu now opens.
 - Cut and paste in the text menu now act on the field you opened the menu in.
+- Two of the three MCP actions could never succeed; the screen now offers only the one that can.
+- The sleep-prevention setting was missing the agent's own default, so it reported "Off" over a machine that was in fact staying awake.
+- The transcript no longer re-renders on every keystroke.
+- A diff the shell cut short is no longer offered to the clipboard as a patch: it applied cleanly and wrote the wrong file. The panel says when what it is showing is incomplete.
+- Failures from the model picker and the approval-mode menu are shown instead of dropped.
+- The working indicator's dots are round again; the previous fix lost to the flattener on specificity while claiming to have won.
 - Deleting a session now stops its process even when the session route is not mounted; the transcript used to be unlinked from under a running agent whose next write went to a file with no name.
 - A background turn is no longer the first thing evicted when a fourth tab opens: the pool now counts streaming output as activity, not just what the app types.
 - The pre-warmed spare counts against the three-process ceiling instead of quietly making it four.

@@ -23,6 +23,12 @@ export function ApprovalModeBadge() {
 	const [mode, setMode] = useState<string | null>(null);
 	const [open, setOpen] = useState(false);
 	const [saved, setSaved] = useState<string | null>(null);
+	/*
+	 * Its own, because this component has no bridge: it reads and writes through
+	 * the CLI, so there is no session error banner to borrow. The old comment here
+	 * pointed at the settings screen, which is not where you are when you use this.
+	 */
+	const [failed, setFailed] = useState<string | null>(null);
 	const root = useRef<HTMLDivElement>(null);
 
 	useEffect(() => {
@@ -57,12 +63,13 @@ export function ApprovalModeBadge() {
 	}, [open]);
 
 	const choose = useCallback(async (next: string) => {
+		setFailed(null);
 		try {
 			await writeConfig("tools.approvalMode", next);
 			setMode(next);
 			setSaved(next);
-		} catch {
-			/* the settings screen surfaces write failures properly */
+		} catch (cause) {
+			setFailed(cause instanceof Error ? cause.message : String(cause));
 		}
 	}, []);
 
@@ -114,9 +121,11 @@ export function ApprovalModeBadge() {
 						);
 					})}
 					<p className="omp-picker__note">
-						{saved
-							? "Saved. Applies to sessions started from now on — this one keeps its current mode."
-							: `This session stays on ${current?.label ?? mode}. The change applies to sessions started from now on.`}
+						{failed
+							? `Could not save: ${failed}`
+							: saved
+								? "Saved. Applies to sessions started from now on — this one keeps its current mode."
+								: `This session stays on ${current?.label ?? mode}. The change applies to sessions started from now on.`}
 					</p>
 				</div>
 			) : null}

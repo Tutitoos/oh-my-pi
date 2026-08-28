@@ -137,7 +137,7 @@ export async function repositoryState(bridge: RpcBridge): Promise<RepositoryStat
  * spaces, quotes or newlines survive intact. Renames emit two NUL-terminated
  * entries (new path, then old).
  */
-export async function changedFiles(bridge: RpcBridge, root: string): Promise<ChangedFile[]> {
+export async function changedFiles(bridge: RpcBridge, root: string): Promise<ChangedListing> {
 	const git = at(root);
 	const [statusResult, numstatResult] = await Promise.all([
 		run(bridge, `${git} status --porcelain=v1 -z --untracked-files=all | ${UNZ}`),
@@ -152,7 +152,10 @@ export async function changedFiles(bridge: RpcBridge, root: string): Promise<Cha
 		files.push({ ...entry, ...count });
 	}
 
-	return files.sort((a, b) => a.path.localeCompare(b.path));
+	return {
+		files: files.sort((a, b) => a.path.localeCompare(b.path)),
+		truncated: statusResult.truncated || numstatResult.truncated,
+	};
 }
 
 /** Unified diff for one file, or the whole tree when `path` is omitted. */
@@ -169,10 +172,22 @@ export async function rawFileDiff(bridge: RpcBridge, root: string, path: string)
 		bridge,
 		`${at(root)} diff HEAD --no-color --no-ext-diff --unified=3 -- ${shellQuote(path)}`,
 	);
+	/*
+	 * Refuse rather than hand over a patch with a hole in it. The shell caps how
+	 * much it returns and elides the middle, and the result still *looks* like a
+	 * diff — header, hunks, the lot — so `git apply` accepts it and writes the
+	 * wrong file. The flag has been on the response type all along and nothing
+	 * read it.
+	 */
+	if (result.truncated) {
+		throw new Error(
+			"This diff is too large to copy — the shell truncated it, and a partial patch would not apply cleanly.",
+		);
+	}
 	return result.output.trim();
 }
 
-export async function fileDiff(bridge: RpcBridge, root: string, path?: string): Promise<FileDiff[]> {
+export async function fileDiff(bridge: RpcBridge, root: string, path?: string): Promise<DiffListing> {
 	const git = at(root);
 	const target = path ? ` -- ${shellQuote(path)}` : "";
 	// `--no-ext-diff` keeps a configured external difftool from replacing the
@@ -192,31 +207,52 @@ export async function fileDiff(bridge: RpcBridge, root: string, path?: string): 
 		 */
 		if (untracked.exitCode === 0 && untracked.output.trim()) {
 			const body = await run(bridge, `cat ${shellQuote(absolute(root, path))}`);
-			return [
-				{
-					path,
-					binary: false,
-					hunks: [
-						{
-							header: "@@ new file @@",
-							lines: body.output.split("\n").map((text, index) => ({
-								kind: "add" as const,
-								text,
-								newNo: index + 1,
-							})),
-						},
-					],
-				},
-			];
+			return {
+				diffs: [
+					{
+						path,
+						binary: false,
+						hunks: [
+							{
+								header: "@@ new file @@",
+								lines: body.output.split("\n").map((text, index) => ({
+									kind: "add" as const,
+									text,
+									newNo: index + 1,
+								})),
+							},
+						],
+					},
+				],
+				truncated: body.truncated,
+			};
 		}
 	}
 
-	return diffs;
+	return { diffs, truncated: result.truncated };
 }
 
 export interface FileListing {
 	paths: string[];
 	/** The full listing did not fit; what came back is a prefix. */
+	truncated: boolean;
+}
+
+/**
+ * A listing plus whether the shell cut it short.
+ *
+ * The flag is carried out to the panel rather than dropped here because the two
+ * failures look identical from the inside: a repository with three changed files
+ * and a repository whose status output was elided after three both hand back
+ * three entries. Only the caller can say "and there are more".
+ */
+export interface ChangedListing {
+	files: ChangedFile[];
+	truncated: boolean;
+}
+
+export interface DiffListing {
+	diffs: FileDiff[];
 	truncated: boolean;
 }
 

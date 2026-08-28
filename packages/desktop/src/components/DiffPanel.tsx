@@ -29,6 +29,13 @@ export function DiffPanel({ bridge, ready, streaming }: { bridge: RpcBridge; rea
 	const [repo, setRepo] = useState<RepositoryState | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
+	/*
+	 * Truncation is not an error and must not be silence either. The shell caps
+	 * how much a command returns, so a big enough working tree comes back as a
+	 * short list and a diff with its middle removed — both of which look exactly
+	 * like a small, complete answer.
+	 */
+	const [clipped, setClipped] = useState(false);
 
 	const refresh = useCallback(async () => {
 		if (!ready) return;
@@ -37,7 +44,9 @@ export function DiffPanel({ bridge, ready, streaming }: { bridge: RpcBridge; rea
 		try {
 			const state = await repositoryState(bridge);
 			setRepo(state);
-			setFiles(state.kind === "repo" ? await changedFiles(bridge, state.root) : []);
+			const listing = state.kind === "repo" ? await changedFiles(bridge, state.root) : null;
+			setFiles(listing?.files ?? []);
+			setClipped(listing?.truncated ?? false);
 		} catch (cause) {
 			setError(cause instanceof Error ? cause.message : String(cause));
 		} finally {
@@ -70,7 +79,9 @@ export function DiffPanel({ bridge, ready, streaming }: { bridge: RpcBridge; rea
 		let cancelled = false;
 		fileDiff(bridge, root, selected)
 			.then(result => {
-				if (!cancelled) setDiff(result);
+				if (cancelled) return;
+				setDiff(result.diffs);
+				if (result.truncated) setClipped(true);
 			})
 			.catch((cause: unknown) => {
 				if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause));
@@ -180,6 +191,12 @@ export function DiffPanel({ bridge, ready, streaming }: { bridge: RpcBridge; rea
 			</div>
 
 			{error ? <div className="omp-banner omp-banner--error">{error}</div> : null}
+			{clipped ? (
+				<div className="omp-banner omp-banner--info">
+					The shell cut this output short, so what is shown is incomplete. Copying a diff is refused while that is
+					true — a patch missing its middle applies cleanly and writes the wrong file.
+				</div>
+			) : null}
 
 			<div className="omp-diff__files">
 				{files.length === 0 && !busy ? (

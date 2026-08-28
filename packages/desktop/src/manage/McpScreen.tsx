@@ -19,6 +19,13 @@ export function McpScreen({ bridge, commands }: { bridge: RpcBridge; commands: r
 	const [values, setValues] = useState<Record<string, string>>({});
 	const [name, setName] = useState("");
 	const [sent, setSent] = useState<string | null>(null);
+	/*
+	 * The screen used to announce the command as sent before awaiting it, and eat
+	 * the rejection — so a refused `/mcp add` and an accepted one looked exactly
+	 * the same. The results themselves land in the transcript, which is a route
+	 * away; the least this screen owes you is whether the command left at all.
+	 */
+	const [failed, setFailed] = useState<string | null>(null);
 
 	const mcp = useMemo(() => commands.find(command => command.name === "mcp"), [commands]);
 	const fields = useMemo(() => fieldsFor(transport), [transport]);
@@ -41,9 +48,24 @@ export function McpScreen({ bridge, commands }: { bridge: RpcBridge; commands: r
 		// prompt channel means omp validates it against its own schema, so a bad
 		// value produces a real error instead of a silently broken config file.
 		const line = `/mcp add ${name.trim()} ${JSON.stringify(config)}`;
-		setSent(line);
-		await bridge.prompt(line).catch(() => {});
+		setFailed(null);
+		try {
+			await bridge.prompt(line);
+			setSent(line);
+		} catch (cause) {
+			setSent(null);
+			setFailed(cause instanceof Error ? cause.message : String(cause));
+		}
 	}, [bridge, fields, name, transport, values]);
+
+	const runList = useCallback(async () => {
+		setFailed(null);
+		try {
+			await bridge.prompt("/mcp list");
+		} catch (cause) {
+			setFailed(cause instanceof Error ? cause.message : String(cause));
+		}
+	}, [bridge]);
 
 	return (
 		<div className="omp-screen">
@@ -53,6 +75,8 @@ export function McpScreen({ bridge, commands }: { bridge: RpcBridge; commands: r
 					Runs through the session's <code>/mcp</code> command, so results appear in the transcript.
 				</p>
 			</header>
+
+			{failed ? <div className="omp-banner omp-banner--error">Could not send that command: {failed}</div> : null}
 
 			{/*
 			 * Only `list`, because only `list` can work from here. `test` takes a
@@ -70,7 +94,7 @@ export function McpScreen({ bridge, commands }: { bridge: RpcBridge; commands: r
 					data-size="normal"
 					disabled={!hasSubcommand(mcp, "list")}
 					title={hasSubcommand(mcp, "list") ? undefined : "This omp build has no /mcp list"}
-					onClick={() => void bridge.prompt("/mcp list").catch(() => {})}
+					onClick={() => void runList()}
 				>
 					/mcp list
 				</button>

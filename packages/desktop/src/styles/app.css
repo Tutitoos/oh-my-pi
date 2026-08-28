@@ -1349,11 +1349,19 @@ body {
 .omp-dot,
 /*
  * The working indicator's three dots. A square version of them is not the same
- * object — the same reason `.omp-dot` is here — and the flattener's `:not()`
- * list named the dot and forgot these, so they animated as squares in both the
- * turn indicator and the compaction banner.
+ * object — the same reason `.omp-dot` is here.
+ *
+ * These need their ancestor spelled out and `.omp-dot` does not, because the two
+ * escape the flattener by different routes: `.omp-dot` is named in its `:not()`,
+ * so the rule never matches it at all, while these are matched and have to win.
+ * Both declarations are `!important`, so specificity decides, and a bare
+ * `.omp-working span` (0,1,1) loses to `.omp-shell *:not(.omp-dot, …)` — whose
+ * `:not()` contributes its most specific argument, making it (0,2,0). Naming the
+ * ancestor takes these to (0,2,1). An earlier fix added the selector to this
+ * rule without it and left the dots square while claiming they were round.
  */
-.omp-working span {
+.omp-shell .omp-working span,
+.omp-backdrop .omp-working span {
 	border-radius: 50% !important;
 	box-shadow: none !important;
 }
