@@ -1,3 +1,4 @@
+import { tokenizeShellSegments } from "@oh-my-pi/pi-coding-agent/tools/shell-tokenize";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { RpcBridge } from "../rpc/bridge";
 import type { AvailableSlashCommand } from "../rpc/protocol";
@@ -205,9 +206,28 @@ function coerce(field: SchemaField, raw: string): unknown {
 			return Number(raw);
 		case "boolean":
 			return raw === "true";
-		case "array":
-			// Args are whitespace-separated in every real-world example.
-			return raw.split(/\s+/).filter(Boolean);
+		case "array": {
+			/*
+			 * Quoting respected, because an argument is not a word. A server started
+			 * with `-e "process.stdout.write('hi there')"`, a JSON value, or a path
+			 * with spaces became several argv entries under a plain whitespace
+			 * split — the `/mcp add` was accepted, and the server then launched with
+			 * the wrong argv and failed. `tokenizeShellSegments` is the repository's
+			 * own tokenizer, already used by the bash approval matcher.
+			 */
+			const trimmed = raw.trim();
+			// A JSON array is the escape hatch for anything the tokenizer cannot
+			// express, and the shape `/mcp add` ultimately wants anyway.
+			if (trimmed.startsWith("[")) {
+				try {
+					const parsed: unknown = JSON.parse(trimmed);
+					if (Array.isArray(parsed)) return parsed.map(String);
+				} catch {
+					// Fall through and tokenize: a half-typed array is not an error yet.
+				}
+			}
+			return tokenizeShellSegments(trimmed)[0] ?? [];
+		}
 		case "record":
 			try {
 				return JSON.parse(raw);

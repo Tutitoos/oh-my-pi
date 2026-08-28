@@ -11,6 +11,7 @@ import { forgetSession } from "./rpc/boot";
 import { anyTabBusy, busyTabs, forgetTab, markViewed } from "./shell/activity";
 import type { MenuItem } from "./shell/contextMenu";
 import { newChatId } from "./shell/ids";
+import { onNotificationActivate } from "./shell/notifications";
 import { useCloseGuard } from "./shell/useCloseGuard";
 import { useGlobalContextMenu } from "./shell/useGlobalContextMenu";
 import { usePanelWidths } from "./shell/usePanelWidths";
@@ -276,6 +277,18 @@ export function App() {
 	);
 
 	useGlobalContextMenu(shellItems);
+
+	/*
+	 * A notification announces a session that is not on screen, so clicking it has
+	 * to land you there. Registered here because `activate` is the shell's, and
+	 * once for the app rather than once per session view — every open tab renders,
+	 * so a per-view listener would be N of them answering the same click.
+	 */
+	useEffect(() => {
+		// No cleanup: the listener is the app's, not this render's, and it replaces
+		// its handler rather than stacking one per pass.
+		onNotificationActivate(activate);
+	}, [activate]);
 
 	// Closing mid-turn loses only the turn in flight — the transcript is already
 	// on disk — but that turn can be a lot of work.

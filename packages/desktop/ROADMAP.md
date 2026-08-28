@@ -251,6 +251,21 @@ that way and are not listed.
   because importing those types makes `packages/ai` stop type-checking under the
   DOM lib this package needs.
 
+- [x] **B14 · The sixth round: three more, and a claim of mine that was false**
+  The sidebar's `done` dot latches on the falling edge and is cleared only by
+  `markViewed`, which runs on activation — so the tab you are already on kept
+  announcing a finished turn while you read it. MCP arguments were split on
+  whitespace, so a quoted `-e` script or a path with spaces reached the server as
+  several argv entries; it now goes through the repository's own
+  `tokenizeShellSegments`, with a JSON array as the escape hatch. And the
+  changelog said clicking a notification brings that session forward when no
+  click handler existed at all — my line, written before the feature. The
+  notification now carries its tab in `extra` and the shell activates it.
+
+  **Unverified, and it is the interesting half:** whether macOS delivers a plain
+  body click to `onAction` at all. The round trip is right in code; nobody has
+  clicked one. It belongs to C5's manual pass.
+
 ## P2 · Verification — things believed to work that nothing observes
 
 - [x] **C1 · The package's 266 tests run in no CI bucket**

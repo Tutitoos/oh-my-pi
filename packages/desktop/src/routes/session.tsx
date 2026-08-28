@@ -17,7 +17,7 @@ import { Transcript } from "../components/Transcript";
 import { compactionLabel, compactTokens } from "../rpc/compaction";
 import { isTauri, onWindowDrop } from "../rpc/transport";
 import { useBridge } from "../rpc/useBridge";
-import { setTabActivity } from "../shell/activity";
+import { markViewed, setTabActivity } from "../shell/activity";
 import { registerBridge } from "../shell/bridges";
 import { notifyApprovalPending, notifyTurnComplete } from "../shell/notifications";
 
@@ -128,7 +128,15 @@ function SessionView({
 	// and the close guard reads the same store.
 	useEffect(() => {
 		setTabActivity(tab.tabId, { streaming, attention: Boolean(snapshot.pendingUi) });
-	}, [tab.tabId, streaming, snapshot.pendingUi]);
+		/*
+		 * `done` latches on the falling edge and only `markViewed` clears it, and
+		 * that runs when a tab is ACTIVATED. The tab you are already on is never
+		 * activated again, so its sidebar dot sat on "finished" while you were
+		 * reading the very answer it was announcing — and returning to the window
+		 * did not clear it either. Seeing it is what viewing means.
+		 */
+		if (visible && !streaming) markViewed(tab.tabId);
+	}, [tab.tabId, streaming, snapshot.pendingUi, visible]);
 
 	// Deliberately no cleanup: a session stays in the store while it is open, and
 	// nothing closes sessions any more.
@@ -148,7 +156,7 @@ function SessionView({
 		 * a status added later cannot silently rejoin this branch.
 		 */
 		if (wasStreaming.current && !streaming && snapshot.status === "ready") {
-			notifyTurnComplete(snapshot.state?.model?.id);
+			notifyTurnComplete(snapshot.state?.model?.id, tab.tabId);
 			void bridge
 				.getSessionStats()
 				.then(stats => setCost(typeof stats?.cost === "number" ? stats.cost : undefined))
@@ -159,7 +167,7 @@ function SessionView({
 
 	const pendingUiId = snapshot.pendingUi?.id;
 	useEffect(() => {
-		if (pendingUiId) notifyApprovalPending("The agent is waiting for your approval.");
+		if (pendingUiId) notifyApprovalPending("The agent is waiting for your approval.", tab.tabId);
 	}, [pendingUiId]);
 
 	// The pool reclaims background processes by design. Resume on the way back in,

@@ -29,6 +29,8 @@
 - Renaming or exporting a session whose process is running but whose view is not open now refuses instead of starting a second agent on the same transcript.
 - "Stop the process" works from Settings and the other non-session screens, where it used to do nothing while the sidecar kept running.
 - The working indicator's dots are round again; the previous fix lost to the flattener on specificity while claiming to have won.
+- A sidebar dot no longer stays on "finished" for the session you are reading; being on screen counts as having seen it.
+- An MCP argument with spaces in it — a quoted `-e` script, a path — is kept as one argument instead of being split into several, which used to launch the server with the wrong argv.
 - Reopening the model picker after a failed load now retries instead of showing "Nothing matches" until the app is restarted, and only the model actually in use is highlighted when two providers share an id.
 - Remounting a session no longer leaves the tab in an error state: a second start for the same tab attaches to the live process again.
 - Your message appears the moment you send it, instead of waiting for the agent to echo it back — which on the first message of a session meant several seconds of a blank screen while its MCP servers connected.
