@@ -1,4 +1,5 @@
 import { Markdown } from "@oh-my-pi/collab-web/src/components/transcript/Markdown";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { memo, useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import { compactionMethodLabel, compactTokens } from "../rpc/compaction";
 import type { CompactionEntry, TranscriptEntry } from "../rpc/transcript";
@@ -75,7 +76,7 @@ export const Transcript = memo(function Transcript({
 		const href = anchor?.getAttribute("href");
 		if (!href || !/^(?:https?:|mailto:)/i.test(href)) return;
 		event.preventDefault();
-		void import("@tauri-apps/plugin-opener").then(({ openUrl }) => openUrl(href)).catch(() => {});
+		void openUrl(href).catch(() => {});
 	}, []);
 
 	if (entries.length === 0 && !streaming) {

@@ -17,6 +17,9 @@
 
 ### Fixed
 
+- `abort_compact` now answers once the compaction has unwound, so a client that asks straight afterwards is no longer told the session is still compacting.
+- Custom tools receive the compaction's origin on the end event, not only on the start.
+- Fixed a manual compaction that fell back to another method leaving its lifecycle event unmatched, so a client could keep showing a compaction that had finished.
 - Fixed `set_plan_mode: false` over the `rpc-ui` protocol leaving the running turn planning under the plan-mode toolset; it now interrupts that turn, like the terminal's `/plan` toggle. Approving a plan still exits without interrupting.
 - Fixed `omp sessions --json` failing to build after the pi-vcs migration; worktrees are attributed to their primary checkout again.
 ### Fixed

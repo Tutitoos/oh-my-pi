@@ -1,4 +1,4 @@
-import { openPath } from "@tauri-apps/plugin-opener";
+import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { memo, type MouseEvent as ReactMouseEvent, useCallback, useEffect, useRef, useState } from "react";
 import type { RpcBridge } from "../rpc/bridge";
 import { writeClipboard } from "../shell/clipboard";
@@ -128,10 +128,7 @@ export function DiffPanel({ bridge, ready, streaming }: { bridge: RpcBridge; rea
 					relative: path,
 					absolute: full,
 					open: () => void openInEditor(path),
-					reveal: () =>
-						void import("@tauri-apps/plugin-opener")
-							.then(({ revealItemInDir }) => revealItemInDir(full))
-							.catch(fail),
+					reveal: () => void revealItemInDir(full).catch(fail),
 					copy: text => void writeClipboard(text).catch(fail),
 					// Re-read rather than reuse what is on screen: the open diff may be
 					// another file's, and the panel only holds one at a time.

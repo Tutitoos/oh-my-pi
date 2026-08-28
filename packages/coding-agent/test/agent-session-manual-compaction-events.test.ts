@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
+import { scheduler } from "node:timers/promises";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import * as compactionModule from "@oh-my-pi/pi-agent-core/compaction";
 import type { Message, Model } from "@oh-my-pi/pi-ai";
@@ -266,6 +267,44 @@ describe("AgentSession manual compaction lifecycle events", () => {
 		expect(harness.events.filter(event => event.type === "auto_compaction_start")).toHaveLength(1);
 		expect(harness.events.filter(event => event.type === "auto_compaction_end")).toHaveLength(1);
 		expect(harness.events[0]).toMatchObject({ reason: "manual", action: "soft" });
+	});
+
+	it("cancelling a compaction hands back a barrier that waits for it to unwind", async () => {
+		/*
+		 * `abortCompaction` used to swallow the maintenance layer's cleanup barrier
+		 * with `void` and declare `void`, so no caller could wait for it even if it
+		 * wanted to. Aborting only *asks* the pass to stop; the abort controller is
+		 * cleared in `compact`'s `finally`, after the agent reconnects. A client
+		 * that asked anything in between was told the session was still compacting
+		 * — the RPC `abort_compact` acknowledged on the statement after the call,
+		 * and the desktop re-enabled its Compact button on that acknowledgement.
+		 * The terminal has been papering over the same gap with two
+		 * `while (isCompacting) await Bun.sleep(10)` loops.
+		 */
+		const harness = await createHarness(["soft"]);
+		const gate = Promise.withResolvers<void>();
+		vi.spyOn(compactionModule, "compact").mockImplementation(async preparation => {
+			await gate.promise;
+			return {
+				summary: "llm summary",
+				shortSummary: "llm",
+				firstKeptEntryId: preparation.firstKeptEntryId,
+				tokensBefore: 42,
+			};
+		});
+
+		const running = harness.session.compact().catch(() => {});
+		await scheduler.wait(10);
+		expect(harness.session.isCompacting).toBe(true);
+
+		const settled = harness.session.abortCompaction();
+		gate.resolve();
+		await settled;
+
+		// The whole point: by the time the barrier resolves the pass has unwound,
+		// so anything asked after it gets a truthful answer.
+		expect(harness.session.isCompacting).toBe(false);
+		await running;
 	});
 
 	it("a refusal before any method is chosen stays silent — nothing started", async () => {

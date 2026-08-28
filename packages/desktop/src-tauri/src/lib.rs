@@ -658,14 +658,6 @@ fn agent_start(
 	 * `MAX_LIVE_SESSIONS` allows. Losing the race costs one wasted spawn; the
 	 * loser kills its own child and attaches to the winner's.
 	 */
-	// Stopped while it was starting. The command that stopped it was told the
-	// truth as it stood; honouring that here is what keeps it true.
-	if !pool.reserved.remove(&tab_id) {
-		drop(pool);
-		let _ = child.kill();
-		return Err(format!("session {tab_id} was stopped while it was starting"));
-	}
-
 	if let Some(existing) = pool.sessions.get_mut(&tab_id) {
 		touch(&existing.activity);
 		let winner = Arc::clone(&existing.sink);
@@ -674,6 +666,23 @@ fn agent_start(
 		let _ = child.kill();
 		adopt(&winner, &tab_id, on_event)?;
 		return Ok(AgentHandle { pid: winner_pid, resumed: true, prewarmed: false });
+	}
+
+	/*
+	 * Stopped while it was starting. The command that stopped it was told the
+	 * truth as it stood; honouring that here is what keeps it true.
+	 *
+	 * AFTER the branch above, and the order is the whole thing. Two starts for
+	 * one tab share a single reservation, so the winner consumes it — checking
+	 * first, the loser found it gone and reported the tab stopped, killing an
+	 * `agent_start` that should have attached to the live child. That is exactly
+	 * the double-mount this function has been idempotent for since the beginning.
+	 * A missing reservation only means "stopped" when there is also no session.
+	 */
+	if !pool.reserved.remove(&tab_id) {
+		drop(pool);
+		let _ = child.kill();
+		return Err(format!("session {tab_id} was stopped while it was starting"));
 	}
 
 	/*

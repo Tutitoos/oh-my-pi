@@ -838,7 +838,38 @@ export class SessionMaintenance {
 					`remote compaction is unavailable for ${activeModel.id}; trying the next preferred method`,
 					"compaction",
 				);
-				return await this.compact(customInstructions, options, selectedMethodIndex + 1, compactionAbortController);
+				/*
+				 * Closed here, because this `return` is in front of every other close.
+				 * The nested call carries the same controller, so it opens no bracket
+				 * of its own — and when it SUCCEEDS, the outer frame used to return
+				 * its result with the start still unmatched, leaving every subscriber
+				 * holding a compaction that never ended. It only leaked on success: a
+				 * throw reaches the generic close below, because `methodAttempted` is
+				 * still false this early.
+				 */
+				const skippedResult = await this.compact(
+					customInstructions,
+					options,
+					selectedMethodIndex + 1,
+					compactionAbortController,
+				);
+				if (manualLifecycleOpen) {
+					manualLifecycleOpen = false;
+					await this.#emitLifecycleEvent(
+						{
+							type: "auto_compaction_end",
+							// The method that ran, not the one there was no endpoint for.
+							action: this.#lastCompletedMethod ?? selectedMethod ?? "context-full",
+							reason: "manual",
+							result: skippedResult,
+							tokensAfter: this.#host.getContextUsage()?.tokens,
+							aborted: false,
+							willRetry: false,
+						},
+						false,
+					);
+				}
+				return skippedResult;
 			}
 			const pathEntries = this.#host.sessionManager.getBranch();
 			const preparation = prepareCompaction(pathEntries, effectiveSettings, activeModel, this.#tokenizer);

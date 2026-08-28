@@ -15,16 +15,34 @@ import { useEscape } from "../shell/useEscape";
 export function ModelPicker({ bridge, state }: { bridge: RpcBridge; state: RpcSessionState | null }) {
 	const [open, setOpen] = useState(false);
 	const [models, setModels] = useState<Array<{ provider: string; id: string }> | null>(null);
+	/*
+	 * Kept apart from `models`, because a failure is not an empty catalog. Writing
+	 * `[]` into `models` made the load effect skip forever — it fires only while
+	 * `models` is null — so one refusal while the sidecar was starting or
+	 * suspended left the picker saying "Nothing matches" until the component
+	 * remounted, and reopening it never tried again.
+	 */
+	const [failed, setFailed] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
 	const [query, setQuery] = useState("");
 	const root = useRef<HTMLDivElement>(null);
 
 	useEffect(() => {
 		if (!open || models) return;
+		let cancelled = false;
+		setFailed(null);
 		void bridge
 			.getAvailableModels()
-			.then(setModels)
-			.catch(() => setModels([]));
+			.then(list => {
+				if (!cancelled) setModels(list);
+			})
+			.catch((cause: unknown) => {
+				// Left null on purpose: the next open retries.
+				if (!cancelled) setFailed(cause instanceof Error ? cause.message : String(cause));
+			});
+		return () => {
+			cancelled = true;
+		};
 	}, [bridge, models, open]);
 
 	// Click-outside and Escape both close it; a menu that traps focus for a
@@ -141,7 +159,10 @@ export function ModelPicker({ bridge, state }: { bridge: RpcBridge; state: RpcSe
 
 					<div className="omp-picker__list">
 						{models === null ? <div className="omp-picker__empty">Loading…</div> : null}
-						{models !== null && visible.length === 0 ? (
+						{failed !== null ? (
+							<div className="omp-picker__empty">Could not read the model list: {failed}</div>
+						) : null}
+						{failed === null && models !== null && visible.length === 0 ? (
 							<div className="omp-picker__empty">Nothing matches.</div>
 						) : null}
 						{visible.slice(0, 100).map(model => (
@@ -149,7 +170,13 @@ export function ModelPicker({ bridge, state }: { bridge: RpcBridge; state: RpcSe
 								className="omp-slash__item"
 								key={`${model.provider}/${model.id}`}
 								type="button"
-								data-active={model.id === state?.model?.id || undefined}
+								// Provider and id together: the bundled catalog exposes the same
+								// id through more than one provider, and `set_model` and the
+								// session state both identify a model by the pair — so matching
+								// on the id alone lit every one of them.
+								data-active={
+									(model.id === state?.model?.id && model.provider === state?.model?.provider) || undefined
+								}
 								disabled={busy}
 								onClick={() => void choose(model.provider, model.id)}
 							>

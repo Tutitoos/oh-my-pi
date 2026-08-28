@@ -5073,9 +5073,21 @@ export class AgentSession {
 		return this.#maintenance.compact(customInstructions, options);
 	}
 
-	/** Cancel active manual, automatic, and handoff maintenance, preserving an optional source reason. */
-	abortCompaction(reason?: unknown): void {
-		void this.#maintenance.abortCompaction(reason);
+	/**
+	 * Cancel active manual, automatic, and handoff maintenance, preserving an
+	 * optional source reason.
+	 *
+	 * Hands back the manual pass's cleanup barrier rather than dropping it. The
+	 * maintenance layer has always returned one; `void` threw it away and the
+	 * `void` return type stopped any caller from waiting even if it wanted to, so
+	 * a client that asked anything straight after a cancellation could still be
+	 * told the session was compacting. The terminal works around exactly that
+	 * with `while (isCompacting) await Bun.sleep(10)` in two places.
+	 *
+	 * `undefined` when no manual pass was running — there is nothing to wait for.
+	 */
+	abortCompaction(reason?: unknown): Promise<void> | undefined {
+		return this.#maintenance.abortCompaction(reason);
 	}
 
 	/** Trigger idle compaction through the automatic maintenance flow. */

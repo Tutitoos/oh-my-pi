@@ -1621,7 +1621,12 @@ export async function runRpcMode(
 			}
 
 			case "abort_compact": {
-				session.abortCompaction();
+				// Awaited, so the acknowledgement means the session has finished
+				// unwinding. Answering first let a `get_state` that followed it report
+				// `isCompacting: true`, a second `compact` come back
+				// `compaction_in_progress`, and the desktop re-enable its button on a
+				// session that was not ready for it.
+				await session.abortCompaction();
 				return success(id, "abort_compact");
 			}
 

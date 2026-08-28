@@ -349,6 +349,24 @@ describe("transcript model against captured streaming shapes", () => {
  *
  * So this reads omp's own declaration rather than a copy of it. A fixture would
  * drift with us; the source cannot.
+ *
+ * AGENTS.md:284 bans reading implementation source and asserting on its text,
+ * and the ban is right about the risk: a reformat of `rpc-types.ts` breaks this,
+ * and a wrongly encoded frame could still pass. The rule's own alternative — a
+ * type test — was built and measured, and it does not work here:
+ *
+ *   - it catches the exact historical bug (`path` where the server declares
+ *     `sessionPath`) as a compile error, so the idea is sound;
+ *   - but importing those types pulls omp's transitive type graph into this
+ *     package's `tsconfig`, and under the DOM lib the desktop needs,
+ *     `packages/ai/src/providers/bedrock-mantle.ts` stops type-checking —
+ *     `Uint8Array` is not a `BodyInit` once DOM's `RequestInit` is in scope.
+ *     It also takes the package's typecheck from 0.4s to ~6s.
+ *
+ * Making that work means changing another package's types for this one's
+ * convenience. So the scan stays, deliberately and in the open, until the RPC
+ * types can be imported without the rest of the graph. Four of the five shape
+ * bugs this package has had went client-to-server, and nothing else looks there.
  */
 describe("commands we send match what the server declares", () => {
 	const TYPES = new URL("../../coding-agent/src/modes/rpc/rpc-types.ts", import.meta.url).pathname;

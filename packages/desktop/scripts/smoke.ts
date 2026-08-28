@@ -24,7 +24,6 @@
  *   bun run smoke --build    # build it first
  */
 
-import { spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { WEBVIEW_READY } from "../src/shell/webview-marker";
@@ -52,10 +51,12 @@ const REFUSALS = [
 	/panicked at/,
 ];
 
-function run(command: string, args: string[]): Promise<number> {
-	return new Promise(resolve => {
-		spawn(command, args, { cwd: ROOT, stdio: "inherit" }).on("exit", code => resolve(code ?? 1));
-	});
+async function run(command: string, args: string[]): Promise<number> {
+	// `Bun.spawn` with the parent's stdio, and its own `exited` promise — the
+	// same APIs the rest of this file already uses for `pgrep`, rather than
+	// wrapping a node event in a promise by hand.
+	const proc = Bun.spawn([command, ...args], { cwd: ROOT, stdout: "inherit", stderr: "inherit" });
+	return await proc.exited;
 }
 
 async function sidecarCount(): Promise<number> {
@@ -86,18 +87,23 @@ if (!(await fs.exists(APP))) {
 const before = await sidecarCount();
 
 console.log("launching the packaged app…");
-const child = spawn(APP, [], { cwd: ROOT });
+const child = Bun.spawn([APP], { cwd: ROOT, stdout: "pipe", stderr: "pipe" });
+/*
+ * Both streams into one buffer, because the checks below ask questions of the
+ * output as a whole: the page's own diagnostics arrive on stderr through
+ * `webview_log`, while a refusal Tauri prints can land on either.
+ */
 let output = "";
-child.stdout.on("data", chunk => {
-	output += chunk;
-});
-child.stderr.on("data", chunk => {
-	output += chunk;
-});
+const drain = async (stream: ReadableStream<Uint8Array>): Promise<void> => {
+	const decoder = new TextDecoder();
+	for await (const chunk of stream) output += decoder.decode(chunk);
+};
+void drain(child.stdout).catch(() => {});
+void drain(child.stderr).catch(() => {});
 
 let exited: number | null = null;
-child.on("exit", code => {
-	exited = code ?? 0;
+void child.exited.then(code => {
+	exited = code;
 });
 
 const deadline = Date.now() + BOOT_BUDGET_MS;
