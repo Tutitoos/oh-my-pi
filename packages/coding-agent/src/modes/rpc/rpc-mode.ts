@@ -784,6 +784,51 @@ export function requestRpcDialog<T>(
 	output({ type: "extension_ui_request", id, ...request } as RpcExtensionUIRequest);
 	return promise;
 }
+
+/** The part of {@link AgentSession} that leaving plan mode touches. */
+export interface RpcPlanModeExitTarget {
+	readonly isStreaming: boolean;
+	abort(options?: { reason?: string }): Promise<void>;
+	runModeExitTeardown(teardown: () => Promise<void>): Promise<void>;
+	setPlanMode(enabled: boolean, options?: { restoreTools?: string[] }): Promise<string[]>;
+}
+
+/**
+ * Leave plan mode, stopping the turn still running under the plan-mode toolset
+ * when the exit is the user deciding to stop planning.
+ *
+ * Not every exit is. Approving a plan leaves plan mode from inside the very
+ * turn that wrote to `xd://propose`, so an abort there kills the execution the
+ * approval exists to start. Both RPC exits share one door on purpose —
+ * `planPreviousTools` used to be cleared by one and left behind by the other,
+ * and the next enable read the leftover as a re-entry — so the door itself has
+ * to carry the difference. The terminal splits the same way: its `/plan`
+ * toggle exits with `interruptActiveTurn`, `#approvePlan` without it.
+ *
+ * The abort sits inside `runModeExitTeardown` for the reason the interactive
+ * path gives: a steer queued behind the aborted turn would otherwise start a
+ * fresh run while the plan-mode tools are still live, and then have them
+ * removed underneath it.
+ */
+export async function exitRpcPlanMode(
+	session: RpcPlanModeExitTarget,
+	options: { restoreTools: string[] | undefined; interruptActiveTurn: boolean },
+): Promise<void> {
+	const tearDown = async () => {
+		await session.setPlanMode(false, { restoreTools: options.restoreTools });
+	};
+	// Nothing streaming is nothing to interrupt, and an abort raised over an idle
+	// session is an interruption event the client would have to explain away.
+	if (!options.interruptActiveTurn || !session.isStreaming) {
+		await tearDown();
+		return;
+	}
+	await session.runModeExitTeardown(async () => {
+		await session.abort({ reason: USER_INTERRUPT_LABEL });
+		await tearDown();
+	});
+}
+
 /**
  * Run in RPC mode.
  * Listens for JSON commands on stdin, outputs events and responses on stdout.
@@ -1097,6 +1142,7 @@ export async function runRpcMode(
 			cwd: session.sessionManager.getCwd(),
 		}).catch(() => null);
 
+		planReviewCancel = new AbortController();
 		const choice = await requestRpcSelect(
 			pendingExtensionRequests,
 			output,
@@ -1106,8 +1152,10 @@ export async function runRpcMode(
 				{ label: REFINE_OPTION, description: "Keep planning; the agent revises the plan file" },
 			],
 			// No timeout: a plan review waits for a person. `ask` does the same thing
-			// while plan mode is on, for the same reason.
-			{},
+			// while plan mode is on, for the same reason. The signal is the way back
+			// out of that wait — a review that no one answers otherwise pins the turn
+			// it blocks, and with it anything waiting for that turn to stop.
+			{ signal: planReviewCancel.signal },
 			planMarkdown ? { message: planMarkdown, planFilePath } : undefined,
 		);
 
@@ -1142,8 +1190,13 @@ export async function runRpcMode(
 		 * directly restored the tools but left `planPreviousTools` defined, so the
 		 * next enable read it as a re-entry and sent the wrong plan-mode context to
 		 * a session that had never been in plan mode this time round.
+		 *
+		 * Without `interruptActiveTurn`, and that is not an oversight: an approval
+		 * is a request to start executing, and when it arrives from the `write` to
+		 * `xd://propose` the turn it would stop is the one carrying it out. Only the
+		 * client toggling the mode off is asking for a turn to end.
 		 */
-		await setRpcPlanMode(false);
+		await setRpcPlanMode(false, { interruptActiveTurn: false });
 		return {
 			content: [
 				{
@@ -1158,7 +1211,23 @@ export async function runRpcMode(
 	/** The tool set to hand back when plan mode ends. */
 	let planPreviousTools: string[] | undefined;
 
-	const setRpcPlanMode = async (enabled: boolean): Promise<void> => {
+	/**
+	 * The plan review currently on a client's screen, if any.
+	 *
+	 * It is the one dialog in the process that survives an abort: `ask` is handed
+	 * the tool call's own signal, while a plan-proposal handler is handed no
+	 * signal at all, so leaving plan mode has to supply one.
+	 */
+	let planReviewCancel: AbortController | undefined;
+
+	/*
+	 * `interruptActiveTurn` is required, not optional, and that is the point: the
+	 * two exits differ only in this flag, so a default would let one of them be
+	 * deleted as tidying — "both go through the same door, why does one pass a
+	 * flag?" — and the deletion would be silent. Made mandatory, each caller has
+	 * to state which kind of exit it is, and removing that no longer compiles.
+	 */
+	const setRpcPlanMode = async (enabled: boolean, options: { interruptActiveTurn: boolean }): Promise<void> => {
 		if (enabled) {
 			if (session.getPlanModeState()?.enabled) return;
 			planPreviousTools = await session.setPlanMode(true, { reentry: planPreviousTools !== undefined });
@@ -1166,7 +1235,18 @@ export async function runRpcMode(
 			return;
 		}
 		if (!session.getPlanModeState()?.enabled) return;
-		await session.setPlanMode(false, { restoreTools: planPreviousTools });
+		/*
+		 * The review goes first, and it has to: `abort()` waits for the agent loop,
+		 * and the loop is inside the `write` that is waiting on the review dialog.
+		 * A client that toggles the mode off instead of answering would hold the
+		 * serial command queue against every later frame — `abort` included — with
+		 * nothing left able to release it.
+		 */
+		if (options.interruptActiveTurn) planReviewCancel?.abort();
+		await exitRpcPlanMode(session, {
+			restoreTools: planPreviousTools,
+			interruptActiveTurn: options.interruptActiveTurn,
+		});
 		planPreviousTools = undefined;
 	};
 
@@ -1553,7 +1633,16 @@ export async function runRpcMode(
 				if (!session.settings.get("plan.enabled")) {
 					return error(id, "set_plan_mode", "Plan mode is disabled. Enable it in settings (plan.enabled).");
 				}
-				await setRpcPlanMode(command.enabled);
+				/*
+				 * Turning it off is the user saying stop planning, so the turn still
+				 * running under the plan-mode toolset stops with it. Without that, the
+				 * plan-mode block the turn started under kept the model planning until
+				 * it produced a plan, long after the client had been told the mode was
+				 * off — the same thing the terminal's `/plan` toggle was fixed for in
+				 * #9699. The approval exit shares this helper and does not pass the
+				 * flag.
+				 */
+				await setRpcPlanMode(command.enabled, { interruptActiveTurn: true });
 				return success(id, "set_plan_mode", { enabled: session.getPlanModeState()?.enabled === true });
 			}
 

@@ -14,6 +14,11 @@
 ### Changed
 
 - `compact` is dispatched in the background like `bash`, so `abort` and `get_state` keep answering while a compaction runs.
+
+### Fixed
+
+- Fixed `set_plan_mode: false` over the `rpc-ui` protocol leaving the running turn planning under the plan-mode toolset; it now interrupts that turn, like the terminal's `/plan` toggle. Approving a plan still exits without interrupting.
+
 ## [18.0.8] - 2026-08-27
 
 ### Added

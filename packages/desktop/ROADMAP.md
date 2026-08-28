@@ -86,7 +86,7 @@ that way and are not listed.
 
 ## P1 · Behaviour — the app does the wrong thing, visibly
 
-- [ ] **B1 · Leaving plan mode over RPC does not interrupt the running turn**
+- [x] **B1 · Leaving plan mode over RPC does not interrupt the running turn**
   `packages/coding-agent/src/modes/rpc/rpc-mode.ts` — `set_plan_mode` exits
   without interruption while the terminal's exit passes `interruptActiveTurn`.
   Turning plan mode off from the app mid-turn leaves that turn running under the
