@@ -6,11 +6,26 @@ import type { Message, Model } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { ExtensionRuntime, loadExtensionFromFactory } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
+import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { TempDir } from "@oh-my-pi/pi-utils";
+
+/**
+ * The extension factory may run in its own context, so it cannot close over a
+ * local. Same store trick the auto-compaction queue test uses.
+ */
+const extensionSignalKey = "__ompManualCompactionExtensionSignals";
+type SignalGlobal = typeof globalThis & { [extensionSignalKey]?: string[] };
+function extensionSignals(): string[] {
+	const store = globalThis as SignalGlobal;
+	if (!store[extensionSignalKey]) store[extensionSignalKey] = [];
+	return store[extensionSignalKey];
+}
 
 /**
  * A manual compaction announces itself.
@@ -44,6 +59,8 @@ describe("AgentSession manual compaction lifecycle events", () => {
 		session: AgentSession;
 		activeModel: Model;
 		events: AgentSessionEvent[];
+		/** What an extension actually received, in `type:reason` form. */
+		extensionEvents: string[];
 	}> {
 		const activeModel = getBundledModel("aimlapi", "alibaba/qwen3-coder-480b-a35b-instruct");
 		if (!activeModel) throw new Error("Expected bundled text-only model");
@@ -84,13 +101,35 @@ describe("AgentSession manual compaction lifecycle events", () => {
 			"compaction.methodOrder": methodOrder,
 			"compaction.keepRecentTokens": 1,
 		});
-		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
+
+		// Extensions do not read the session bus — they get their own converted
+		// copy of each event, and a field the conversion forgets is simply gone.
+		const runtime = new ExtensionRuntime();
+		extensionSignals().length = 0;
+		const extension = await loadExtensionFromFactory(
+			pi => {
+				const record = (key: string) => (event: { reason?: string }) => {
+					const signals = (globalThis as typeof globalThis & { __ompManualCompactionExtensionSignals?: string[] })
+						.__ompManualCompactionExtensionSignals;
+					signals?.push(`${key}:${event.reason ?? "none"}`);
+				};
+				pi.on("auto_compaction_start", record("start"));
+				pi.on("auto_compaction_end", record("end"));
+			},
+			tempDir.path(),
+			new EventBus(),
+			runtime,
+			"manual-compaction-observer",
+		);
+		const extensionRunner = new ExtensionRunner([extension], runtime, tempDir.path(), sessionManager, modelRegistry);
+
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry, extensionRunner });
 		const events: AgentSessionEvent[] = [];
 		session.subscribe(event => {
 			if (event.type === "auto_compaction_start" || event.type === "auto_compaction_end") events.push(event);
 		});
 
-		return { session, activeModel, events };
+		return { session, activeModel, events, extensionEvents: extensionSignals() };
 	}
 
 	it("brackets a successful pass with a manual start and an end carrying the result", async () => {
@@ -136,6 +175,29 @@ describe("AgentSession manual compaction lifecycle events", () => {
 		await harness.session.compact();
 
 		expect(harness.events.map(event => (event as { reason?: string }).reason)).toEqual(["manual", "manual"]);
+	});
+
+	it("hands the origin to extensions on both halves, not just to the session bus", async () => {
+		/*
+		 * The session bus and the extension bus are different buses: every event
+		 * crossing to an extension is re-built field by field, and this one dropped
+		 * `reason` on the end half. `action` cannot stand in for it — a manual pass
+		 * and an automatic one both report `remote` — so an extension that wanted to
+		 * ignore the operator's own compaction had nothing left to key off. It is
+		 * the fifth time a field has gone missing across a conversion in this
+		 * codebase; the test is what makes it the last.
+		 */
+		const harness = await createHarness(["soft"]);
+		vi.spyOn(compactionModule, "compact").mockImplementation(async preparation => ({
+			summary: "s",
+			shortSummary: "s",
+			firstKeptEntryId: preparation.firstKeptEntryId,
+			tokensBefore: 10,
+		}));
+
+		await harness.session.compact();
+
+		expect(harness.extensionEvents).toEqual(["start:manual", "end:manual"]);
 	});
 
 	it("a failed manual pass still says it was manual", async () => {

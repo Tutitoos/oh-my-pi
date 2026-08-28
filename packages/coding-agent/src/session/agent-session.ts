@@ -3826,6 +3826,7 @@ export class AgentSession {
 			await this.#extensionRunner.emit({
 				type: "auto_compaction_end",
 				action: event.action,
+				reason: event.reason,
 				result: event.result,
 				tokensAfter: event.tokensAfter,
 				aborted: event.aborted,

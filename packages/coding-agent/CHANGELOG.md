@@ -9,6 +9,7 @@
 - `abort_compact` cancels a compaction without aborting the turn, and closing stdin cancels one in flight.
 - Manual compaction now reports itself the same way automatic compaction does, and the end of a pass carries the token count after the rewrite.
 - Compaction refusals carry a machine-readable code, so clients no longer match on English prose.
+- The compaction lifecycle events extensions receive now carry `reason` on the end half as well as the start, so an extension can tell an operator-initiated pass from an automatic one — `action` cannot, since both report the same value.
 
 ### Changed
 

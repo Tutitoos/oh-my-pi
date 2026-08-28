@@ -233,6 +233,16 @@ export interface AutoCompactionStartEvent {
 export interface AutoCompactionEndEvent {
 	type: "auto_compaction_end";
 	action: "context-full" | "remote" | "handoff" | "shake" | "snapcompact" | "soft";
+	/**
+	 * Why the pass ran, echoed from its `auto_compaction_start`.
+	 *
+	 * Optional because it arrived after the event did. `action` cannot stand in
+	 * for it — a manual pass and an automatic one both report `remote` — so an
+	 * extension that wants to ignore the operator's own compaction has nothing
+	 * else to key off, and pairing halves by arrival order is not something a
+	 * bus with several front-ends can offer.
+	 */
+	reason?: "threshold" | "overflow" | "idle" | "incomplete" | "manual";
 	result: CompactionResult | undefined;
 	/** Context tokens after the rewrite; `CompactionResult` carries only the before. */
 	tokensAfter?: number;
