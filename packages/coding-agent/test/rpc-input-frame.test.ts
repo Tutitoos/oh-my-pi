@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { CompactionCancelledError } from "@oh-my-pi/pi-agent-core/compaction";
 import { RpcHostToolBridge } from "@oh-my-pi/pi-coding-agent/modes/rpc/host-tools";
 import {
 	dispatchRpcInputFrame,
@@ -759,6 +760,39 @@ describe("backgrounded commands never let a rejection escape", () => {
 
 		// Without this the client is left matching on the engine's wording.
 		expect(outputs[0]).toMatchObject({ code: "already_compacted" });
+	});
+
+	test("a failure that merely mentions cancelling is not reported as cancelled", async () => {
+		/*
+		 * `cancelled` used to be an unanchored `/cancel/i` while every other code
+		 * matched an anchored sentence the engine writes. Any failure whose message
+		 * happened to contain the word — a provider complaining about a cancelled
+		 * upstream request — told the client the operator had stopped it.
+		 */
+		const { deps, outputs } = makeDeps(async () => {
+			throw new Error("provider error: upstream request was cancelled by the gateway");
+		});
+		const tracked: Array<Promise<void>> = [];
+		deps.trackBackgroundTask = task => tracked.push(task);
+
+		new RpcInputDispatcher({ deps }).dispatch({ id: "c1", type: "compact" } as RpcCommand);
+		await Promise.all(tracked);
+
+		expect(outputs[0]).toMatchObject({ success: false });
+		expect((outputs[0] as { code?: string }).code).toBeUndefined();
+	});
+
+	test("a real cancellation is recognised by its type, not its wording", async () => {
+		const { deps, outputs } = makeDeps(async () => {
+			throw new CompactionCancelledError();
+		});
+		const tracked: Array<Promise<void>> = [];
+		deps.trackBackgroundTask = task => tracked.push(task);
+
+		new RpcInputDispatcher({ deps }).dispatch({ id: "c1", type: "compact" } as RpcCommand);
+		await Promise.all(tracked);
+
+		expect(outputs[0]).toMatchObject({ code: "cancelled" });
 	});
 
 	test("compact does not queue behind the serial commands it must outlive", async () => {

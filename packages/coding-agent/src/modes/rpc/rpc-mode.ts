@@ -11,6 +11,7 @@
  * - Extension UI: Extension UI requests are emitted, client responds with extension_ui_response
  */
 import { once } from "node:events";
+import { CompactionCancelledError } from "@oh-my-pi/pi-agent-core/compaction";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { $env, isRecord, Snowflake } from "@oh-my-pi/pi-utils";
@@ -348,14 +349,22 @@ export function isBackgroundRpcCommand(command: RpcCommand): boolean {
  * avoid. Mapped here, at the boundary, rather than reshaping the engine's
  * errors.
  */
-function compactionErrorCode(message: string): string | undefined {
-	const text = message.trim();
+function compactionErrorCode(error: unknown): string | undefined {
+	/*
+	 * Cancellation is asked of the type, not of the prose. The others are
+	 * anchored sentences the engine writes; this one used to be an unanchored
+	 * `/cancel/i`, which claimed any failure whose message merely mentioned the
+	 * word — a provider error about a cancelled upstream request, say — and told
+	 * the client the operator had stopped it.
+	 */
+	if (error instanceof CompactionCancelledError) return "cancelled";
+
+	const text = (error instanceof Error ? error.message : String(error)).trim();
 	if (/^Already compacted$/i.test(text)) return "already_compacted";
 	if (/^Nothing to compact\b/i.test(text)) return "nothing_to_compact";
 	if (/^Compaction already in progress$/i.test(text)) return "compaction_in_progress";
 	if (/^No model selected$/i.test(text)) return "no_model";
 	if (/^No configured compaction method/i.test(text)) return "no_method";
-	if (/cancel/i.test(text)) return "cancelled";
 	return undefined;
 }
 
@@ -387,7 +396,7 @@ export function dispatchRpcInputFrame(parsed: unknown, deps: RpcInputFrameDeps):
 				deps.output(await deps.handleCommand(command));
 			} catch (err: unknown) {
 				const message = err instanceof Error ? err.message : String(err);
-				const code = command.type === "compact" ? compactionErrorCode(message) : undefined;
+				const code = command.type === "compact" ? compactionErrorCode(err) : undefined;
 				deps.output(deps.errorResponse(command.id, command.type, message, code));
 			}
 		})();
@@ -1128,7 +1137,13 @@ export async function runRpcMode(
 		}
 
 		session.setPlanReferencePath(planFilePath);
-		await session.setPlanMode(false, { restoreTools: planPreviousTools });
+		/*
+		 * Through the same door as every other exit. Calling `session.setPlanMode`
+		 * directly restored the tools but left `planPreviousTools` defined, so the
+		 * next enable read it as a re-entry and sent the wrong plan-mode context to
+		 * a session that had never been in plan mode this time round.
+		 */
+		await setRpcPlanMode(false);
 		return {
 			content: [
 				{
