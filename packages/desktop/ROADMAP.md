@@ -183,6 +183,15 @@ that way and are not listed.
   window close; a worktree-side rename grew a phantom file with a truncated
   name; `new Promise` where the house rule asks for `Promise.withResolvers`.
 
+- [x] **B11 · A third Codex round: two more, both real** — `agent_kill` answered
+  `Ok` for a tab whose cold start was between dropping the pool lock and
+  inserting its child, so Stop did nothing and delete unlinked the jsonl on the
+  strength of that answer, after which the booting child switched to the missing
+  path and recreated it. A spawn in flight is now reserved, and a stop cancels
+  it. And copying the diff of an untracked file put an empty string on the
+  clipboard, because only the rendered path had a fallback; it now asks git for
+  a real `new file` patch.
+
 - [x] **B10 · Three tests scanned source text, which `AGENTS.md:284` bans** — and
   two of them were added the same morning, on the third as precedent. The ban is
   right: they break on a rename and pass on broken behaviour. Rather than delete

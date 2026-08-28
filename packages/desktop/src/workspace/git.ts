@@ -184,7 +184,30 @@ export async function rawFileDiff(bridge: RpcBridge, root: string, path: string)
 			"This diff is too large to copy — the shell truncated it, and a partial patch would not apply cleanly.",
 		);
 	}
-	return result.output.trim();
+
+	const diff = result.output.trim();
+	if (diff) return diff;
+
+	/*
+	 * An untracked file has no diff against HEAD, so this quietly put an empty
+	 * string on the clipboard for a row the panel was showing as all-additions —
+	 * `fileDiff` has an untracked fallback and this did not.
+	 *
+	 * `--no-index` against /dev/null rather than a hand-assembled patch: git
+	 * writes the real headers, so what lands on the clipboard is something `git
+	 * apply` accepts. It exits 1 when the two differ, which is every time here,
+	 * so the code says nothing and only its output does.
+	 */
+	const asNew = await run(
+		bridge,
+		`${at(root)} diff --no-color --no-ext-diff --no-index -- /dev/null ${shellQuote(path)}`,
+	);
+	if (asNew.truncated) {
+		throw new Error(
+			"This diff is too large to copy — the shell truncated it, and a partial patch would not apply cleanly.",
+		);
+	}
+	return asNew.output.trim();
 }
 
 export async function fileDiff(bridge: RpcBridge, root: string, path?: string): Promise<DiffListing> {

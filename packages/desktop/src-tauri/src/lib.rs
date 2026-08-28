@@ -247,6 +247,20 @@ struct Prewarmed {
 struct Pool {
 	sessions: HashMap<String, Session>,
 	prewarm: Option<Prewarmed>,
+	/*
+	 * Tabs with a spawn in flight.
+	 *
+	 * `agent_start` must not hold the lock across `spawn_sidecar`, so for a few
+	 * seconds a tab has no entry and is nonetheless starting. `agent_kill` and
+	 * `agent_suspend` read that as "nothing to stop" and answered success, and the
+	 * child was installed immediately afterwards — Stop did nothing, and delete was
+	 * worse: the jsonl was unlinked on the strength of that success and the child,
+	 * still booting, then switched to the missing path and recreated it.
+	 *
+	 * A stop removes the reservation rather than waiting on it; the spawn finds it
+	 * gone and kills its own child.
+	 */
+	reserved: HashSet<String>,
 }
 
 #[derive(Default)]
@@ -617,9 +631,22 @@ fn agent_start(
 		}
 	}
 
+	// Claimed before the lock goes down, so a stop arriving mid-spawn has
+	// something to find.
+	pool.reserved.insert(tab_id.clone());
 	drop(pool); // never hold a std guard across the spawn boundary
 
-	let (child, pid, sink, activity) = spawn_sidecar(&app, &tab_id, cwd.as_deref())?;
+	let spawned = spawn_sidecar(&app, &tab_id, cwd.as_deref());
+	let (child, pid, sink, activity) = match spawned {
+		Ok(parts) => parts,
+		Err(error) => {
+			// Give the claim back, or the tab can never be started again.
+			if let Ok(mut pool) = sessions.0.lock() {
+				pool.reserved.remove(&tab_id);
+			}
+			return Err(error);
+		}
+	};
 
 	let mut pool = sessions.0.lock().map_err(|_| "sessions mutex poisoned")?;
 	/*
@@ -631,6 +658,14 @@ fn agent_start(
 	 * `MAX_LIVE_SESSIONS` allows. Losing the race costs one wasted spawn; the
 	 * loser kills its own child and attaches to the winner's.
 	 */
+	// Stopped while it was starting. The command that stopped it was told the
+	// truth as it stood; honouring that here is what keeps it true.
+	if !pool.reserved.remove(&tab_id) {
+		drop(pool);
+		let _ = child.kill();
+		return Err(format!("session {tab_id} was stopped while it was starting"));
+	}
+
 	if let Some(existing) = pool.sessions.get_mut(&tab_id) {
 		touch(&existing.activity);
 		let winner = Arc::clone(&existing.sink);
@@ -689,12 +724,13 @@ fn agent_suspend(
 	sessions: State<'_, Sessions>,
 	tab_id: String,
 ) -> Result<(), String> {
-	let session = sessions
-		.0
-		.lock()
-		.map_err(|_| "sessions mutex poisoned")?
-		.sessions
-		.remove(&tab_id);
+	let session = {
+		let mut pool = sessions.0.lock().map_err(|_| "sessions mutex poisoned")?;
+		// Cancels a spawn still in flight as well as killing a live child: without
+		// it this answered "stopped" for a tab that was about to start.
+		pool.reserved.remove(&tab_id);
+		pool.sessions.remove(&tab_id)
+	};
 	if let Some(session) = session {
 		session.child.kill().map_err(|e| e.to_string())?;
 	}
@@ -706,12 +742,19 @@ fn agent_suspend(
 /// take ownership — you cannot kill through a `&mut` from `get_mut`.
 #[tauri::command]
 fn agent_kill(sessions: State<'_, Sessions>, tab_id: String) -> Result<(), String> {
-	let session = sessions
-		.0
-		.lock()
-		.map_err(|_| "sessions mutex poisoned")?
-		.sessions
-		.remove(&tab_id);
+	let session = {
+		let mut pool = sessions.0.lock().map_err(|_| "sessions mutex poisoned")?;
+		/*
+		 * The reservation goes first, and that is the whole point. A cold
+		 * `agent_start` has no entry here for the seconds it spends spawning, so
+		 * this used to answer `Ok` for a tab that was about to come up — Stop did
+		 * nothing, and delete unlinked the jsonl on the strength of that answer,
+		 * after which the booting child switched to the missing path and recreated
+		 * it. Dropping the claim makes the pending start kill its own child.
+		 */
+		pool.reserved.remove(&tab_id);
+		pool.sessions.remove(&tab_id)
+	};
 	match session {
 		Some(s) => s.child.kill().map_err(|e| e.to_string()),
 		None => Ok(()),

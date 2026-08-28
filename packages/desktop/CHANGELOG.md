@@ -29,6 +29,8 @@
 - Renaming or exporting a session whose process is running but whose view is not open now refuses instead of starting a second agent on the same transcript.
 - "Stop the process" works from Settings and the other non-session screens, where it used to do nothing while the sidecar kept running.
 - The working indicator's dots are round again; the previous fix lost to the flattener on specificity while claiming to have won.
+- Stopping or deleting a session while its process is still starting now actually stops it, instead of reporting success and letting the process come up anyway.
+- Copying the diff of a new file now produces a patch that applies, instead of putting an empty string on the clipboard.
 - A message refused after the agent had already accepted it comes back to the composer instead of vanishing; the reason is shown where you are, including inside the expanded editor.
 - An approval or question the agent has stopped waiting for now closes itself instead of holding the screen and the queue behind it.
 - The editor dialog opens on the document it was asked to edit rather than blank, so submitting untouched no longer replaces that document with nothing.
