@@ -230,6 +230,27 @@ that way and are not listed.
   **Done when:** a background tab's dot lights between Send and `turn_start`, and
   navigating away mid-send does not leave it lit.
 
+- [x] **B13 · The fifth review round: nine findings, one a regression of the
+  fourth** — the reservation check landed in front of the branch that adopts an
+  installed winner, so a second `agent_start` for one tab reported the session
+  stopped instead of attaching to it. Plus: the model picker cached a transient
+  failure as an empty catalog and never retried; the active row matched on id
+  without provider; two dynamic `import()` survived a sweep I had called done;
+  the smoke probe used node's spawn twelve lines above its own `Bun.spawn`;
+  `abort_compact` acknowledged before the cleanup barrier it was already handed;
+  custom tools got the compaction origin only on the start half; and a manual
+  pass falling back to another method returned in front of every lifecycle close.
+
+  **Two honest gaps.** I could not build a test that reaches that fallback
+  branch — the active model is added as its own first candidate and passes the
+  filter by construction whenever `remote` was selected on provider-native
+  support — so the fix is reasoned, not proven, and the test that passed either
+  way was removed rather than kept as decoration. And the conformance test still
+  reads `rpc-types.ts` as text: the rule's own alternative was built and
+  measured, catches the historical bug as a compile error, and is unusable here
+  because importing those types makes `packages/ai` stop type-checking under the
+  DOM lib this package needs.
+
 ## P2 · Verification — things believed to work that nothing observes
 
 - [x] **C1 · The package's 266 tests run in no CI bucket**
