@@ -9,10 +9,16 @@
  *
  * This does not click. It answers the narrower question that has been going
  * unasked: launch the real bundle, and see whether the process stays up, the
- * webview loads, the relay spawns a sidecar, and nothing in the output says
- * something was refused. A plugin config key that `deny_unknown_fields` rejects,
- * a capability Tauri cannot parse, or a CSP that blocks the bundle all surface
- * here as a dead window or a refusal line.
+ * PAGE loads, the relay spawns a sidecar, and nothing in the output says
+ * something was refused.
+ *
+ * "The page loads" is the part that took two tries. A sidecar appearing proves
+ * nothing about the webview — Rust pre-warms one during `setup`, before a
+ * webview exists — so this script's original check passed with a dead window
+ * while its failure message claimed the opposite. What proves it is a line only
+ * the page can emit, which `src/shell/diagnostics.ts` sends to the host on boot.
+ * That same channel carries the page's CSP violations and uncaught errors out to
+ * stderr, which is what makes the refusal patterns below reachable at all.
  *
  *   bun run smoke            # against the existing debug bundle
  *   bun run smoke --build    # build it first
@@ -21,6 +27,7 @@
 import { spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { WEBVIEW_READY } from "../src/shell/webview-marker";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const APP = path.join(ROOT, "src-tauri/target/debug/bundle/macos/omp Desktop.app/Contents/MacOS/omp-desktop");
@@ -95,12 +102,14 @@ child.on("exit", code => {
 
 const deadline = Date.now() + BOOT_BUDGET_MS;
 let spawned = false;
+let loaded = false;
 while (Date.now() < deadline && exited === null) {
 	await Bun.sleep(1_000);
-	if ((await sidecarCount()) > before) {
-		spawned = true;
-		break;
-	}
+	if (!spawned && (await sidecarCount()) > before) spawned = true;
+	if (!loaded && output.includes(WEBVIEW_READY)) loaded = true;
+	// Both, not either: they answer different questions and each has been the
+	// one that was broken.
+	if (spawned && loaded) break;
 }
 
 // Let anything that was going to go wrong go wrong.
@@ -111,13 +120,22 @@ const alive = exited === null;
 if (alive) child.kill();
 
 if (exited !== null) fail(`the app exited on its own with code ${exited}`, output.trim() || "(no output)");
+if (!loaded) {
+	fail(
+		"the window never reported itself loaded",
+		`Nothing printed "${WEBVIEW_READY}", so the page did not run: the bundle failed to load, the CSP blocked its\n` +
+			"script, or it threw before `installDiagnostics`. The process staying up says nothing here — the window\n" +
+			"can be blank and alive.\n" +
+			(output.trim() || "(no output)"),
+	);
+}
 if (!spawned) {
 	fail(
-		"no sidecar appeared, so the webview never reached the relay",
-		"That is a dead window: the page failed to load, or `agent_start` was refused.\n" +
+		"the relay never spawned a sidecar",
+		"`setup` pre-warms one, so not even that ran: the sidecar binary is missing, or the shell plugin was refused.\n" +
 			(output.trim() || "(no output)"),
 	);
 }
 if (refusal) fail(`something was refused: ${refusal[0]}`, output.trim());
 
-console.log("\n✓ the packaged app starts, loads, and reaches a sidecar with nothing refused");
+console.log("\n✓ the packaged app starts, its window loads, the relay spawns a sidecar, and nothing was refused");

@@ -69,6 +69,10 @@ const RAW_OUT: bool = true;
 /// Label used for a pre-warmed child that no tab has claimed yet.
 const PREWARM_LABEL: &str = "__prewarm__";
 
+/// Cap on one `webview_log` line. Generous for a message, small enough that a
+/// runaway error handler cannot fill a terminal.
+const MAX_DIAGNOSTIC_BYTES: usize = 2_000;
+
 // ---------------------------------------------------------------------------
 // Wire types
 // ---------------------------------------------------------------------------
@@ -697,6 +701,31 @@ fn agent_kill(sessions: State<'_, Sessions>, tab_id: String) -> Result<(), Strin
 	}
 }
 
+/// Print one line from the webview to the host's stderr.
+///
+/// A packaged webview has no console anyone can open, so what the page knows
+/// about its own failures — a blocked resource, an uncaught error, a rejected
+/// capability — dies inside it. Three defects shipped in this app for exactly
+/// that reason. This is also the only signal that distinguishes a live window
+/// from a dead one: `setup` pre-warms a sidecar before any webview exists, so a
+/// running sidecar says nothing about whether the page loaded.
+#[tauri::command]
+fn webview_log(level: String, message: String) {
+	// Truncated, because this crosses a trust boundary: the page could otherwise
+	// flood the host's stderr with a single call. Backed off to a char boundary
+	// first — `String::truncate` counts bytes and PANICS mid-character, and the
+	// text here is arbitrary and can carry any error message the page produced.
+	let mut text = message;
+	if text.len() > MAX_DIAGNOSTIC_BYTES {
+		let mut end = MAX_DIAGNOSTIC_BYTES;
+		while end > 0 && !text.is_char_boundary(end) {
+			end -= 1;
+		}
+		text.truncate(end);
+	}
+	eprintln!("webview[{level}]: {text}");
+}
+
 /// Run a short-lived `omp <args…>` and return its stdout.
 ///
 /// The RPC protocol has no configuration surface — none of its 59 commands
@@ -1028,7 +1057,8 @@ pub fn run() {
 			omp_cli,
 			agent_oneshot,
 			delete_session,
-			read_dropped_image
+			read_dropped_image,
+			webview_log
 		])
 		.setup(|app| {
 			schedule_prewarm(&app.handle().clone());

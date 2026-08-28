@@ -7,6 +7,7 @@ import { OnboardingRoute } from "./routes/onboarding";
 import { ProbeRoute } from "./routes/probe";
 import { SessionRoute } from "./routes/session";
 import { ContextMenuProvider } from "./shell/contextMenu";
+import { installDiagnostics } from "./shell/diagnostics";
 import "./styles/index.css";
 
 /**
@@ -27,6 +28,9 @@ const router = createHashRouter([
 		],
 	},
 ]);
+
+// Before the render, so a failure during the first render is still reported.
+installDiagnostics();
 
 const root = document.getElementById("root");
 if (!root) throw new Error("#root missing from index.html");
