@@ -114,9 +114,19 @@ export async function bootSession(bridge: RpcBridge, options: { sessionPath?: st
 	// on `!handle.resumed` left a re-attached tab blank and, since the `ready`
 	// frame is never re-sent either, permanently "starting". All four are
 	// idempotent queries, so repeating them costs a round trip and nothing else.
-	const state = await bridge.getState().catch(() => undefined);
-	await bridge.getAvailableCommands().catch(() => {});
-	await bridge.setSubagentSubscription("events").catch(() => {});
+	/*
+	 * Together, not one after another. None of the three feeds the others, so
+	 * awaiting each on its own line spent three serial round trips to buy what
+	 * one buys: against a relay answering in 20 ms, a cold open of a 600-message
+	 * session cost 197 ms of round trips serialised and 115 ms overlapped. The
+	 * protocol is built for this — responses correlate by `id` and docs/rpc.md is
+	 * explicit that emission order is not guaranteed.
+	 */
+	const [state] = await Promise.all([
+		bridge.getState().catch(() => undefined),
+		bridge.getAvailableCommands().catch(() => {}),
+		bridge.setSubagentSubscription("events").catch(() => {}),
+	]);
 
 	const target = resumeTarget({
 		sessionPath: options.sessionPath,

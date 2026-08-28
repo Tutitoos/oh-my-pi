@@ -200,6 +200,36 @@ that way and are not listed.
   structural. `useEscape` owns the target and every overlay goes through it, so
   there is no per-overlay decision left to get wrong.
 
+- [x] **B12 · A sent message took seconds to appear** — measured before touching
+  anything: the sidecar acknowledges a prompt in **34 ms**, and the second and
+  third prompts of a session echo the message in 34 ms and open the turn in 6 ms.
+  The whole cost is the FIRST prompt of a session — 3.7 s in one run, 12 s under
+  load — spent connecting MCP servers, and the app's boot sequence does not warm
+  it. What was ours: nothing was drawn until the server echoed the message back,
+  and the working indicator comes from `state.isStreaming`, which is refreshed
+  only at turn boundaries — so it lit at the END of the wait. The composer now
+  draws the message immediately and the server's copy reconciles with it.
+
+  Measured and deliberately NOT changed: the relay's coalescing adds a mean of
+  4 ms; the bridge already collapses a batch of 50 deltas into one snapshot
+  notification; and the transcript's memoisation holds — 0.995 entry identities
+  change per delta at 300 entries, so one bubble re-renders, not 300.
+
+  **Still open, and named rather than guessed at:** `message_update` carries the
+  whole message, so `marked` re-parses it per batch and is superlinear — 16 ms
+  per delta at 20 KB, ~940 ms cumulative for a 20 KB answer. The obvious fix
+  (`useDeferredValue`) was designed and then rejected: it breaks the transcript's
+  auto-scroll while streaming, and worst in exactly the long-answer case it would
+  serve. A real fix needs the pin to follow the deferred commit.
+
+- [ ] **C6 · The sidebar dot does not light during a turn that is still starting**
+  The transcript's indicator does, because a pending echo is its own proof of
+  work. Carrying that to the sidebar needs a bridge-level flag the activity store
+  can read for unmounted tabs — and that store has no cleanup, so a flag
+  published and orphaned by a route change would show a busy session forever.
+  **Done when:** a background tab's dot lights between Send and `turn_start`, and
+  navigating away mid-send does not leave it lit.
+
 ## P2 · Verification — things believed to work that nothing observes
 
 - [x] **C1 · The package's 266 tests run in no CI bucket**

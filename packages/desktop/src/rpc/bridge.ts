@@ -969,12 +969,38 @@ export class RpcBridge {
 	 * window between a turn starting and that refresh landing was refused. The
 	 * terminal tags an ordinary Enter the same way, for the same race.
 	 */
-	async prompt(message: string, images?: unknown[], onLateFailure?: (cause: Error) => void): Promise<void> {
-		await this.request(
+	async prompt(message: string, images?: unknown[], onLateFailure?: (cause: Error) => void): Promise<boolean> {
+		const data = await this.request<{ agentInvoked?: boolean } | undefined>(
 			{ type: "prompt", message, images, streamingBehavior: "steer" },
 			DEFAULT_TIMEOUT_MS,
 			onLateFailure,
 		);
+		// rpc-mode answers an ACP builtin (`/model`, `/mcp`, `/compact`, …) on the
+		// response itself — `executeAcpBuiltinSlashCommand` runs before the prompt
+		// ever reaches `AgentSession`, so no `prompt_result` frame is emitted and
+		// no user message is ever recorded. A prompt that did start a turn answers
+		// with no data at all, so `undefined` means "the agent took it".
+		return !(typeof data === "object" && data !== null && data.agentInvoked === false);
+	}
+
+	/**
+	 * Draw a message in the transcript the moment it is sent.
+	 *
+	 * Not folded into `prompt`: `McpScreen` drives `/mcp add …` through the same
+	 * command and its lines are not something anyone typed into this transcript.
+	 * Only the composer speaks for the user, so only the composer echoes.
+	 *
+	 * Returns the handle `retractUserEcho` needs.
+	 */
+	echoUserMessage(text: string): string {
+		const token = this.#transcript.echo(text);
+		this.#touch();
+		return token;
+	}
+
+	/** Undo an echo whose send was refused, so nothing unsent stays on screen. */
+	retractUserEcho(token: string): void {
+		if (this.#transcript.retract(token)) this.#touch();
 	}
 
 	async steer(message: string, images?: unknown[]): Promise<void> {
@@ -1259,27 +1285,34 @@ export class RpcBridge {
 			this.#events = [];
 			this.#touch();
 			/*
-			 * Before the history, not after. `#state` has one writer and nothing on a
-			 * switch wakes it — `STATE_CHANGING_EVENTS` is turn and compaction
-			 * boundaries — so the model, the thinking level, the context usage and the
-			 * model picker's selection all went on describing the session this process
-			 * booted into until the first turn event. Paging a long history takes
-			 * seconds, and every one of them showed the wrong session.
+			 * Asked for together, and that is the point of the pair.
+			 *
+			 * `#state` has one writer and nothing on a switch wakes it —
+			 * `STATE_CHANGING_EVENTS` is turn and compaction boundaries — so the
+			 * model, the thinking level, the context usage and the model picker's
+			 * selection all went on describing the session this process booted into
+			 * until the first turn event. Paging a long history takes seconds, and
+			 * every one of them showed the wrong session. What fixes that is the
+			 * re-read being ON THE WIRE before the paging finishes, not it having
+			 * already come back: awaiting it first delayed the slow half by a whole
+			 * round trip and bought the state nothing, since it lands one round trip
+			 * after the switch either way.
+			 *
+			 * Switching replays NOTHING through the event stream — the server just
+			 * goes quiet on the new session — so the history has to be pulled in, or
+			 * the chat opens blank, and a blank chat with no explanation is the worst
+			 * outcome here: it looks like an empty session rather than a failure to
+			 * read one.
 			 */
-			await this.getState().catch(() => {});
-			// Switching replays NOTHING through the event stream — the server just
-			// goes quiet on the new session — so the history has to be pulled in,
-			// or the chat opens blank.
-			/*
-			 * A blank chat with no explanation is the worst outcome here: it looks
-			 * like an empty session rather than a failure to read one.
-			 */
-			await this.loadHistory().catch(cause => {
-				this.#error = `Could not load this session's history: ${
-					cause instanceof Error ? cause.message : String(cause)
-				}`;
-				this.#touch();
-			});
+			await Promise.all([
+				this.getState().catch(() => {}),
+				this.loadHistory().catch(cause => {
+					this.#error = `Could not load this session's history: ${
+						cause instanceof Error ? cause.message : String(cause)
+					}`;
+					this.#touch();
+				}),
+			]);
 		}
 		return result;
 	}

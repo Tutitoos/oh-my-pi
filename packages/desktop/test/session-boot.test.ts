@@ -269,3 +269,63 @@ describe("RpcBridge — switching re-reads the state", () => {
 		expect(transport.types().filter(type => type === "get_state")).toHaveLength(1);
 	});
 });
+
+/*
+ * The one hop of this boot the client itself owns.
+ *
+ * Spawn dominates a cold open and nothing here changes that — but every command
+ * awaited on its own line is another round trip the user waits through, and
+ * three of these depend on nothing. Against a relay answering in 20 ms, a cold
+ * open of a 600-message session took 197 ms of round trips serialised and
+ * 115 ms with the independent ones dispatched together.
+ */
+describe("bootSession — round trips it does not have to serialise", () => {
+	test("the three opening queries go out together, not one after another", async () => {
+		const transport = new ScriptedTransport();
+		const bridge = new RpcBridge("tab-parallel", transport);
+
+		const booting = bootSession(bridge, {});
+		// Nothing has been answered yet, so anything on the wire at this point was
+		// sent without waiting for the command before it.
+		await settle();
+
+		expect(transport.types()).toEqual(["get_state", "get_available_commands", "set_subagent_subscription"]);
+
+		await answerOpeningQueries(transport, sessionState({ sessionFile: "/sessions/parallel.jsonl" }));
+		await booting;
+
+		expect(bridge.getSnapshot().booted).toBe(true);
+	});
+
+	test("the state re-read and the first history page are asked for together", async () => {
+		const transport = new ScriptedTransport();
+		const bridge = new RpcBridge("tab-switch-parallel", transport);
+
+		const booting = bootSession(bridge, { sessionPath: "/sessions/saved.jsonl" });
+		await answerOpeningQueries(
+			transport,
+			sessionState({ sessionId: "throwaway", sessionFile: "/sessions/throwaway.jsonl" }),
+		);
+		transport.reply("switch_session", { cancelled: false });
+		await settle();
+
+		// Neither feeds the other, so neither has a reason to wait on the other's
+		// response. Paging a long session is the slow part; it should not start a
+		// round trip late.
+		expect(transport.types()).toContain("get_messages_page");
+		expect(transport.types().filter(type => type === "get_state")).toHaveLength(2);
+
+		transport.reply("get_state", sessionState({ sessionId: "saved", sessionFile: "/sessions/saved.jsonl" }));
+		await settle();
+		transport.reply("get_messages_page", {
+			messages: [{ role: "assistant", timestamp: 1, content: [{ type: "text", text: "hello" }] }],
+			totalMessages: 1,
+		});
+		await booting;
+
+		// Overlapping them cost the transcript nothing: the page still landed, and
+		// the state still describes the session that was opened.
+		expect(bridge.getSnapshot().transcript).toHaveLength(1);
+		expect(bridge.getSnapshot().state?.sessionId).toBe("saved");
+	});
+});

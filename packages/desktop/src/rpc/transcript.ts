@@ -67,6 +67,15 @@ export interface MessageEntry {
 	 * carries, and the one thing that survives a `hydrate`.
 	 */
 	timestamp?: number;
+	/**
+	 * Drawn from the composer, not from the wire: the message the user just sent,
+	 * shown before the server has echoed it back. Carries the handle that takes
+	 * it out again if the send turns out to have been refused.
+	 *
+	 * Absent on every entry the server produced, which is what makes "has the
+	 * server confirmed this?" a property of the entry rather than a side table.
+	 */
+	pending?: string;
 }
 
 export interface ToolEntry {
@@ -116,6 +125,13 @@ export type TranscriptEntry = MessageEntry | ToolEntry | CompactionEntry;
 interface LiveTail {
 	message: MessageEntry | null;
 	tools: ToolEntry[];
+	/**
+	 * Optimistic user messages the server has not echoed yet. A snapshot cannot
+	 * contain one by construction — it is still in turn setup or sitting in the
+	 * agent's steer queue, neither of which is `session.messages` — so a reload
+	 * mid-send would otherwise swallow the prompt the user is watching.
+	 */
+	echoes: MessageEntry[];
 }
 
 /** Roles whose messages are rendered. Tool results render as tool cards. */
@@ -156,6 +172,103 @@ export class TranscriptModel {
 		this.#messageIndex.clear();
 		this.#openMessage = -1;
 		this.#dirty = true;
+	}
+
+	/**
+	 * Draw a message the composer just sent, before the server has echoed it.
+	 *
+	 * Measured against a live sidecar: the first prompt of a session waits ~3.7s
+	 * for MCP mounting before `message_start` comes back, and until it does the
+	 * transcript has nothing at all in it — the message the user pressed Send on
+	 * simply does not exist on screen. Every later prompt echoes in ~34ms, so this
+	 * is not a workaround for a slow server; it is the difference between a UI
+	 * that acknowledges input and one that swallows it.
+	 *
+	 * Returns the handle `retract` needs. Text only, deliberately: `messageText`
+	 * renders `type: "text"` blocks and nothing else, so an image block here would
+	 * draw nothing while pinning a base64 payload — and an `ObjectURL` here would
+	 * be revoked by the composer's own `clear` the moment the send lands.
+	 */
+	echo(text: string): string {
+		const token = `p${++this.#seq}`;
+		this.#entries.push({
+			kind: "message",
+			id: `m${++this.#seq}`,
+			role: "user",
+			content: [{ type: "text", text }],
+			streaming: false,
+			pending: token,
+		});
+		// A prompt ends whatever the model was writing, for the same reason the
+		// server-side user branch below clears it.
+		this.#openMessage = -1;
+		this.#dirty = true;
+		return token;
+	}
+
+	/** Take an optimistic message back out: it was refused and never sent. */
+	retract(token: string): boolean {
+		const index = this.#entries.findIndex(entry => entry.kind === "message" && entry.pending === token);
+		if (index < 0) return false;
+		this.#removeAt(index);
+		return true;
+	}
+
+	/**
+	 * Drop the newest un-echoed message.
+	 *
+	 * For a prompt the server answered entirely on its own — an extension command
+	 * like `/mcp`, which `AgentSession.prompt` reports as `agentInvoked: false`
+	 * and which never becomes a user message. Nothing will ever echo it, and a
+	 * pending entry that is never claimed poisons every later match.
+	 */
+	retractLatestEcho(): boolean {
+		for (let index = this.#entries.length - 1; index >= 0; index--) {
+			const entry = this.#entries[index];
+			if (entry.kind !== "message" || entry.pending === undefined) continue;
+			this.#removeAt(index);
+			return true;
+		}
+		return false;
+	}
+
+	/**
+	 * Remove one entry and slide every index that pointed past it.
+	 *
+	 * The two maps hold positions into `#entries`, and a splice invalidates every
+	 * one above the hole. Neither map can hold the removed index itself: an echo
+	 * is registered in neither until the server claims it.
+	 */
+	#removeAt(index: number): void {
+		this.#entries.splice(index, 1);
+		for (const [id, at] of this.#toolIndex) if (at > index) this.#toolIndex.set(id, at - 1);
+		for (const [key, at] of this.#messageIndex) if (at > index) this.#messageIndex.set(key, at - 1);
+		if (this.#openMessage > index) this.#openMessage--;
+		this.#dirty = true;
+	}
+
+	/**
+	 * Which optimistic entry this server message is the copy of, or -1.
+	 *
+	 * Content first, position second — the rule omp's own TUI reaches for
+	 * (`event-controller.ts`: exact signature, else "replaces the optimistic
+	 * one"). Neither half works alone. Content alone fails because the server
+	 * records the *expanded* text: `AgentSession.prompt` runs `expandSlashCommand`
+	 * and `expandPromptTemplate` over the message and stores that, so `/review`
+	 * comes back as the whole command body. Position alone fails the moment one
+	 * echo is never claimed, because every later message then lands in the wrong
+	 * bubble and the newest one is orphaned in turn.
+	 */
+	#matchEcho(content: readonly ContentBlock[]): number {
+		const text = messageText(content);
+		let oldest = -1;
+		for (let index = 0; index < this.#entries.length; index++) {
+			const entry = this.#entries[index];
+			if (entry.kind !== "message" || entry.pending === undefined) continue;
+			if (messageText(entry.content) === text) return index;
+			if (oldest < 0) oldest = index;
+		}
+		return oldest;
 	}
 
 	/**
@@ -241,6 +354,9 @@ export class TranscriptModel {
 		return {
 			message: this.#openMessage >= 0 ? (this.#entries[this.#openMessage] as MessageEntry) : null,
 			tools: this.#entries.filter((entry): entry is ToolEntry => entry.kind === "tool" && entry.running),
+			echoes: this.#entries.filter(
+				(entry): entry is MessageEntry => entry.kind === "message" && entry.pending !== undefined,
+			),
 		};
 	}
 
@@ -255,17 +371,34 @@ export class TranscriptModel {
 			this.#entries.push(tool);
 		}
 
-		if (!live.message) return;
-		const key = messageKey(live.message.role, live.message.timestamp, live.message.content);
-		// Already in the answer: `message_end` reached the server before the
-		// snapshot was taken, so this one is finished, not in flight. Adopting it
-		// as the open message pointed `#openMessage` at a settled bubble, and the
-		// next turn's first frame — a different message, so no identity match —
-		// fell back to that index and overwrote it, above its own prompt.
-		if (this.#messageIndex.has(key)) return;
-		this.#messageIndex.set(key, this.#entries.length);
-		this.#entries.push(live.message);
-		this.#openMessage = this.#entries.length - 1;
+		if (live.message) {
+			const key = messageKey(live.message.role, live.message.timestamp, live.message.content);
+			// Already in the answer: `message_end` reached the server before the
+			// snapshot was taken, so this one is finished, not in flight. Adopting it
+			// as the open message pointed `#openMessage` at a settled bubble, and the
+			// next turn's first frame — a different message, so no identity match —
+			// fell back to that index and overwrote it, above its own prompt.
+			if (!this.#messageIndex.has(key)) {
+				this.#messageIndex.set(key, this.#entries.length);
+				this.#entries.push(live.message);
+				this.#openMessage = this.#entries.length - 1;
+			}
+		}
+
+		// Last, and in the order they were sent: an echo stands for something the
+		// user submitted after everything the snapshot could possibly hold.
+		for (const echo of live.echoes) {
+			/*
+			 * The snapshot beat the echo: `get_messages` already has this message,
+			 * so re-appending it would draw the prompt twice — and `#messageIndex`
+			 * would then short-circuit the reconcile, so it could never heal.
+			 */
+			const text = messageText(echo.content);
+			if (this.#entries.some(e => e.kind === "message" && e.role === "user" && messageText(e.content) === text)) {
+				continue;
+			}
+			this.#entries.push(echo);
+		}
 	}
 
 	/**
@@ -288,7 +421,22 @@ export class TranscriptModel {
 				return this.#onToolEnd(frame);
 			case "auto_compaction_end":
 				return this.#onCompactionEnd(frame);
-			case "agent_end":
+			case "agent_end": {
+				/*
+				 * Every echo is settled by the end of the turn it belongs to: the
+				 * server records the user message before `agent_end`, so one still
+				 * pending here will never be echoed — a skill command records role
+				 * `custom`, and a prompt dropped inside turn setup emits nothing at
+				 * all. Retiring it keeps a lost echo from claiming a later message.
+				 */
+				let retired = false;
+				for (let index = 0; index < this.#entries.length; index++) {
+					const entry = this.#entries[index];
+					if (entry.kind !== "message" || entry.pending === undefined) continue;
+					this.#entries[index] = { ...entry, pending: undefined };
+					retired = true;
+				}
+				if (retired) this.#dirty = true;
 				// A run can settle without a final message_end.
 				if (this.#openMessage >= 0) {
 					const entry = this.#entries[this.#openMessage] as MessageEntry;
@@ -297,7 +445,8 @@ export class TranscriptModel {
 					this.#dirty = true;
 					return true;
 				}
-				return false;
+				return retired;
+			}
 			default:
 				return false;
 		}
@@ -343,6 +492,20 @@ export class TranscriptModel {
 		// timestamp is what keeps one prompt from rendering as two bubbles.
 		if (role === "user") {
 			if (this.#messageIndex.has(key)) return false;
+			/*
+			 * The composer already drew this. Claim that entry rather than pushing a
+			 * second one — and take the server's content, which is the text that was
+			 * actually sent once slash commands and prompt templates were expanded.
+			 */
+			const echo = this.#matchEcho(content);
+			if (echo >= 0) {
+				const entry = this.#entries[echo] as MessageEntry;
+				this.#entries[echo] = { ...entry, content, timestamp, pending: undefined };
+				this.#messageIndex.set(key, echo);
+				this.#openMessage = -1;
+				this.#dirty = true;
+				return true;
+			}
 			this.#messageIndex.set(key, this.#entries.length);
 			this.#entries.push({
 				kind: "message",

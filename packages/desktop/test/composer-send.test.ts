@@ -24,19 +24,29 @@ function recorder(send: DraftSink["send"]) {
 	const cleared: DraftContents[] = [];
 	const restored: DraftContents[] = [];
 	const reported: unknown[] = [];
+	const echoed: string[] = [];
+	const retracted: string[] = [];
 	const sink: DraftSink = {
 		send,
+		echo: message => {
+			echoed.push(message);
+			return `echo-${echoed.length}`;
+		},
+		retract: token => retracted.push(token),
 		clear: sent => cleared.push(sent),
 		restore: sent => restored.push(sent),
 		reportError: cause => reported.push(cause),
 	};
-	return { sink, cleared, restored, reported };
+	return { sink, cleared, restored, reported, echoed, retracted };
 }
 
 describe("sendDraft", () => {
 	test("does not give the draft up until the send has landed", async () => {
 		const gate = Promise.withResolvers<void>();
-		const { sink, cleared } = recorder(() => gate.promise);
+		const { sink, cleared } = recorder(async () => {
+			await gate.promise;
+			return true;
+		});
 		const draft = contents();
 
 		const done = sendDraft("ship it", draft, sink);
@@ -51,10 +61,16 @@ describe("sendDraft", () => {
 	});
 
 	test("a rejected send keeps the message and says why", async () => {
-		const { sink, cleared, reported } = recorder(() => Promise.reject(new Error("session suspended to free a slot")));
+		const { sink, cleared, reported, echoed, retracted } = recorder(() =>
+			Promise.reject(new Error("session suspended to free a slot")),
+		);
 
 		await sendDraft("ship it", contents(), sink);
 
+		// Drawn the instant it was sent, and taken straight back out: the
+		// transcript never shows a message the session refused to take.
+		expect(echoed).toEqual(["ship it"]);
+		expect(retracted).toEqual(["echo-1"]);
 		// Nothing was cleared, so nothing was revoked either: the chips keep their
 		// previews and the draft is where the user left it.
 		expect(cleared).toHaveLength(0);
@@ -67,6 +83,7 @@ describe("sendDraft", () => {
 		const seen: unknown[] = [];
 		const { sink } = recorder(async (_message, images) => {
 			seen.push(images);
+			return true;
 		});
 
 		await sendDraft("ship it", contents(), sink);
@@ -89,6 +106,7 @@ describe("a prompt refused after its acknowledgement", () => {
 		let refuse: ((cause: Error) => void) | undefined;
 		const { sink, cleared, restored, reported } = recorder(async (_message, _images, refused) => {
 			refuse = refused;
+			return true;
 		});
 		const draft = contents();
 
@@ -113,6 +131,7 @@ describe("a prompt refused after its acknowledgement", () => {
 		// own resolution is observed.
 		const { sink, cleared, restored, reported } = recorder(async (_message, _images, refused) => {
 			refused(new Error("No API key found for anthropic"));
+			return true;
 		});
 
 		await sendDraft("ship it", contents(), sink);

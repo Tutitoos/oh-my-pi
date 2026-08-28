@@ -54,7 +54,24 @@ export interface DraftSink {
 	 * minutes — so a refusal raised during turn setup (no model selected, no API
 	 * key for the provider) arrives after this promise has already resolved.
 	 */
-	send(message: string, images: ComposerImage[] | undefined, refused: (cause: Error) => void): Promise<void>;
+	send(message: string, images: ComposerImage[] | undefined, refused: (cause: Error) => void): Promise<boolean>;
+	/**
+	 * Draw the message in the transcript before the wire has confirmed it.
+	 *
+	 * Returns the handle `retract` takes it back out with. Called before `send`,
+	 * because the whole point is that the message is on screen while the send is
+	 * still in flight — measured at ~3.7s for the first prompt of a session.
+	 */
+	echo(message: string): string;
+	/**
+	 * Take the optimistic copy back out: this message was never sent.
+	 *
+	 * Unconditional, unlike `restore` — which declines to overwrite a draft the
+	 * user has started typing since. The two agree on the thing that matters: a
+	 * message the server refused is never left standing in the transcript, even
+	 * when its text does not go back into the composer.
+	 */
+	retract(token: string): void;
 	/** Drop exactly what went out, and revoke its previews. */
 	clear(sent: DraftContents): void;
 	/** Put back what `clear` took, for a send that was refused after it. */
@@ -91,25 +108,41 @@ export async function sendDraft(message: string, contents: DraftContents, sink: 
 	 * and the restore would have found a full box and rightly left it alone.
 	 */
 	let outcome: "sending" | "cleared" | "failed" = "sending";
+	/*
+	 * Before the send, not after it. The server does not echo the message back
+	 * until it opens the turn, and for the first prompt of a session that is
+	 * ~3.7s of MCP mounting later — during which the transcript showed nothing at
+	 * all and the app looked like it had eaten the message.
+	 */
+	const echo = sink.echo(message);
 	const refused = (cause: Error) => {
 		if (outcome === "failed") return;
 		const cleared = outcome === "cleared";
 		outcome = "failed";
+		// Unconditionally, and before the restore: a message that did not go must
+		// not be left on screen even when the box is too full to take it back.
+		sink.retract(echo);
 		// Only if it was actually given up. Beat the clear here and the message
 		// is still in the box, previews and all, with nothing to put back.
 		if (cleared) sink.restore({ ...contents, attachments: revivePreviews(contents.attachments) });
 		sink.reportError(refusal(cause));
 	};
+	let took = true;
 	try {
-		await sink.send(message, images.length ? images : undefined, refused);
+		took = await sink.send(message, images.length ? images : undefined, refused);
 	} catch (cause) {
 		outcome = "failed";
+		sink.retract(echo);
 		sink.reportError(refusal(cause));
 		return;
 	}
 	if (outcome !== "sending") return;
 	outcome = "cleared";
 	sink.clear(contents);
+	// Nothing will ever echo a command the server answered on its own: an ACP
+	// builtin is handled before the prompt reaches the session, so no user
+	// message is recorded and no frame ever arrives to claim this echo.
+	if (!took) sink.retract(echo);
 }
 
 /** One sentence for both answers: the message did not go, and it is still here. */
@@ -414,11 +447,16 @@ export function useComposerDraft({
 				message,
 				{ draft, attachments, references },
 				{
+					echo: text => bridge.echoUserMessage(text),
+					retract: token => bridge.retractUserEcho(token),
 					// While a turn is running, `steer` injects into it; `prompt` queues.
 					// Only `prompt` answers twice: the server awaits `steer` before
 					// replying, so its failures reject this send outright.
-					send: (text, images, refused) =>
-						streaming ? bridge.steer(text, images) : bridge.prompt(text, images, refused),
+					send: async (text, images, refused) => {
+						if (!streaming) return await bridge.prompt(text, images, refused);
+						await bridge.steer(text, images);
+						return true;
+					},
 					clear: sent => {
 						for (const attachment of sent.attachments) URL.revokeObjectURL(attachment.previewUrl);
 						/*

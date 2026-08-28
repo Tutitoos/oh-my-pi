@@ -29,6 +29,9 @@
 - Renaming or exporting a session whose process is running but whose view is not open now refuses instead of starting a second agent on the same transcript.
 - "Stop the process" works from Settings and the other non-session screens, where it used to do nothing while the sidecar kept running.
 - The working indicator's dots are round again; the previous fix lost to the flattener on specificity while claiming to have won.
+- Your message appears the moment you send it, instead of waiting for the agent to echo it back — which on the first message of a session meant several seconds of a blank screen while its MCP servers connected.
+- The working indicator now lights when you press Send rather than when the turn finally opens.
+- Opening a session issues its startup queries in parallel where they do not depend on each other, which halves the round trips before the transcript is on screen.
 - Stopping or deleting a session while its process is still starting now actually stops it, instead of reporting success and letting the process come up anyway.
 - Copying the diff of a new file now produces a patch that applies, instead of putting an empty string on the clipboard.
 - A message refused after the agent had already accepted it comes back to the composer instead of vanishing; the reason is shown where you are, including inside the expanded editor.

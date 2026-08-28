@@ -90,11 +90,19 @@ export const Transcript = memo(function Transcript({
 	// with a long thinking phase looked frozen. Show the agent is alive whenever
 	// it is streaming and has not produced visible output for the last entry.
 	const tail = entries.at(-1);
+	/*
+	 * A message the server has not confirmed yet is its own proof that work is
+	 * starting: `streaming` comes from `state.isStreaming`, which is only
+	 * refreshed at turn boundaries, so for the whole gap between Send and the
+	 * turn opening it still reads false. Without this the message would appear
+	 * instantly and then sit there looking ignored.
+	 */
 	const awaitingOutput =
-		streaming &&
-		(!tail ||
-			(tail.kind === "message" && tail.role === "user") ||
-			(tail.kind === "message" && tail.streaming && !messageText(tail.content) && !thinkingText(tail.content)));
+		(tail?.kind === "message" && tail.pending !== undefined) ||
+		(streaming &&
+			(!tail ||
+				(tail.kind === "message" && tail.role === "user") ||
+				(tail.kind === "message" && tail.streaming && !messageText(tail.content) && !thinkingText(tail.content))));
 
 	return (
 		// Delegated click: the anchors it catches are keyboard-native already.
