@@ -171,6 +171,26 @@ that way and are not listed.
   it installed anyway, over the ceiling that the eviction path holds everywhere
   else.
 
+- [x] **B9 · Nine findings from the second Codex round** — a refused
+  `switch_session` at boot read as success; the pool could still reach four
+  processes when two different tabs raced; a message refused *after* the agent
+  accepted it vanished, because the server acknowledges a prompt before the turn
+  starts and the bridge dropped the later refusal as a late frame; an approval
+  the server had stopped waiting for held the screen and the queue, since the
+  timeout path sends no `cancel` and nothing ran the deadline the frame carries;
+  the editor dialog opened blank over the document it was asked to edit; a
+  session whose process died mid-turn kept reading as working, blocking the
+  window close; a worktree-side rename grew a phantom file with a truncated
+  name; `new Promise` where the house rule asks for `Promise.withResolvers`.
+
+- [x] **B10 · Three tests scanned source text, which `AGENTS.md:284` bans** — and
+  two of them were added the same morning, on the third as precedent. The ban is
+  right: they break on a rename and pass on broken behaviour. Rather than delete
+  the guard the third one held — that only the turn's abort handler listens for
+  Escape on `window`, a rule three overlays have broken — the invariant is now
+  structural. `useEscape` owns the target and every overlay goes through it, so
+  there is no per-overlay decision left to get wrong.
+
 ## P2 · Verification — things believed to work that nothing observes
 
 - [x] **C1 · The package's 266 tests run in no CI bucket**
