@@ -7,6 +7,7 @@ import { ResizeHandle } from "./components/ResizeHandle";
 import { Sidebar } from "./components/Sidebar";
 import { TitleBar } from "./components/TitleBar";
 import { adoptSessionIn, findOpenTab, type SessionNode } from "./projects/discover";
+import { forgetSession } from "./rpc/boot";
 import { anyTabBusy, busyTabs, forgetTab, markViewed } from "./shell/activity";
 import type { MenuItem } from "./shell/contextMenu";
 import { newChatId } from "./shell/ids";
@@ -155,6 +156,11 @@ export function App() {
 		setTabs(current => current.filter(tab => tab.tabId !== tabId));
 		setActiveTabId(current => (current === tabId ? SCRATCH.tabId : current));
 		forgetTab(tabId);
+		// The jsonl behind this tab is being unlinked, and a project's tab id is
+		// `dir:<cwd>` — it comes back when that folder is opened again. Left here,
+		// the dead path would be the next process's `switch_session` target, which
+		// does not fail on a missing file: it recreates it.
+		forgetSession(tabId);
 	}, []);
 
 	const adoptSession = useCallback((tabId: string, sessionId: string) => {

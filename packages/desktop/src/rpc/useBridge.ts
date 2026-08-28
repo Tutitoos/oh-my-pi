@@ -10,6 +10,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import { bootSession } from "./boot";
 import { type BridgeSnapshot, RpcBridge, type RpcBridgeOptions } from "./bridge";
 import { isTauri, TauriTransport, type Transport } from "./transport";
 
@@ -18,24 +19,6 @@ export interface UseBridgeResult {
 	snapshot: BridgeSnapshot;
 	/** Re-spawn after a crash and replay the session. */
 	restart(): Promise<void>;
-}
-
-/**
- * Boot steps report rather than vanish. Each is idempotent and non-fatal, so the
- * boot continues — but a swallowed failure here is how a tab ends up blank with
- * nothing anywhere saying why.
- *
- * It goes through the bridge's own error, not `console.warn`: the two steps that
- * use this are the ones that decide what the transcript shows, and a packaged
- * webview has no console anyone will ever open. A failed history reload over a
- * live session renders as a fresh empty chat, which is the one wrong answer the
- * user cannot tell from a right one.
- */
-function reportBootFailure(bridge: RpcBridge, step: string) {
-	return (cause: unknown): void => {
-		console.warn(`omp: ${step} failed`, cause);
-		bridge.reportError(new Error(`${step} failed: ${cause instanceof Error ? cause.message : String(cause)}`));
-	};
 }
 
 export function useBridge(
@@ -67,47 +50,7 @@ export function useBridge(
 
 	const boot = useCallback(async () => {
 		if (!isTauri() && !injected) return; // browser preview: nothing to spawn
-		const handle = await bridge.start(cwd);
-		// Run these on a resumed process too, not just a fresh one. The *process*
-		// already answered them once, but this `RpcBridge` is a new object with an
-		// empty TranscriptModel, no session state and no command list — and it is
-		// new precisely because a reload or a remount discarded the old one. Gating
-		// on `!handle.resumed` left a re-attached tab blank and, since the `ready`
-		// frame is never re-sent either, permanently "starting". All four are
-		// idempotent queries, so repeating them costs a round trip and nothing else.
-		await bridge.getState().catch(() => {});
-		await bridge.getAvailableCommands().catch(() => {});
-		await bridge.setSubagentSubscription("events").catch(() => {});
-		/*
-		 * Switch only into a process that was just spawned.
-		 *
-		 * `switch_session` aborts the session — this file says so four lines down.
-		 * A resumed process is already on this session, so switching into it again
-		 * aborts a turn that is very likely running: leaving the session route and
-		 * coming back remounts the view, which mints a new `RpcBridge`, which
-		 * re-runs this boot. Going to Settings mid-turn and returning killed the
-		 * turn.
-		 */
-		if (sessionPath && !handle?.resumed) {
-			await bridge.switchSession(sessionPath).catch(reportBootFailure(bridge, "Switching to this session"));
-		} else if (handle?.resumed) {
-			/*
-			 * A re-attached process has a conversation and this bridge has an empty
-			 * transcript, so it has to be re-read — otherwise the tab renders "Ask
-			 * the agent something to get started" over a live session and the next
-			 * thing typed lands where nobody can see it.
-			 *
-			 * `reloadMessages`, not `loadHistory`: the latter pages through
-			 * `get_messages_page`, which the server refuses outright while the
-			 * session is streaming or compacting (`session_busy`) — precisely the
-			 * case this exists to cover. `get_messages` carries no such guard.
-			 */
-			await bridge.reloadMessages().catch(reportBootFailure(bridge, "Reloading this session's history"));
-		}
-		// Last, and only now: `switch_session` aborts the session, which takes any
-		// `bash` already in flight with it. The panels watch this rather than
-		// `status`, so their first git command is not the one that gets killed.
-		bridge.markBooted();
+		await bootSession(bridge, { sessionPath, cwd });
 	}, [bridge, injected, sessionPath, cwd]);
 
 	// Start only what someone is looking at. Sessions stay open forever, so

@@ -43,7 +43,7 @@ that way and are not listed.
   longer true. The act-time check in `sessionOps` is the actual safety; the
   greying is only an affordance.
 
-- [ ] **A2 · An evicted in-app chat comes back as a different, empty session**
+- [x] **A2 · An evicted in-app chat comes back as a different, empty session**
   `src/rpc/useBridge.ts` — `boot()` switches sessions only when a `sessionPath`
   is known, and reloads history only when the process was resumed. A chat started
   inside the app has no `sessionPath` by design (`src/app.tsx`: adopting a session
@@ -52,9 +52,13 @@ that way and are not listed.
   user returns, a fresh process is spawned: neither branch runs, `markBooted()`
   is called over an empty session, and the next prompt is written to a different
   jsonl than the transcript on screen.
-  **Done when:** open four tabs to force the eviction of an in-app chat, return
-  to it, and the transcript is still its own; a prompt sent there appends to the
-  same jsonl the tab was showing before eviction.
+  Closed by remembering `tabId → sessionFile` in a module that outlives the
+  bridge, because the identity is *not* knowable after the respawn: the boot's
+  own `get_state` is answered by the new process and describes the session it
+  just created. The memory is erased on close, since a project's tab id is
+  `dir:<cwd>` and comes back — and `switch_session` does not fail on a missing
+  file, it recreates it, so a stale path would resurrect a deleted transcript as
+  an empty one.
 
 - [x] **A3 · The one-shot path never checks whether its `switch_session` worked**
   `src/rpc/sessionOps.ts` — `oneshot()` writes the switch frame and the command
@@ -110,7 +114,7 @@ that way and are not listed.
   **Done when:** toggling plan mode off mid-turn stops the turn; approving a plan
   does not.
 
-- [ ] **B2 · Session state is never refreshed after switching into a saved session**
+- [x] **B2 · Session state is never refreshed after switching into a saved session**
   `src/rpc/useBridge.ts` — `getState()` runs before `switchSession()`, and the
   switch clears the transcript and reloads history without re-reading state.
   State has one writer, driven by turn and compaction events, none of which a

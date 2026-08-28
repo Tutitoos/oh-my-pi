@@ -1118,6 +1118,15 @@ export class RpcBridge {
 			this.#transcript.clear();
 			this.#events = [];
 			this.#touch();
+			/*
+			 * Before the history, not after. `#state` has one writer and nothing on a
+			 * switch wakes it — `STATE_CHANGING_EVENTS` is turn and compaction
+			 * boundaries — so the model, the thinking level, the context usage and the
+			 * model picker's selection all went on describing the session this process
+			 * booted into until the first turn event. Paging a long history takes
+			 * seconds, and every one of them showed the wrong session.
+			 */
+			await this.getState().catch(() => {});
 			// Switching replays NOTHING through the event stream — the server just
 			// goes quiet on the new session — so the history has to be pulled in,
 			// or the chat opens blank.

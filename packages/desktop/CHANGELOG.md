@@ -37,6 +37,8 @@
 - A spare that finished starting after the pool had filled is now discarded instead of installed as a fourth process.
 - A failed history reload on re-attach now says so in the tab, instead of rendering a live session as an empty new chat.
 - Returning to a session after visiting Settings no longer aborts the turn that was running.
+- A chat you started in the app comes back as itself after its process is reclaimed, instead of reopening as a different, empty session under the transcript you were reading.
+- Opening a saved session now shows that session's model, thinking level and context usage straight away, rather than the ones the process started with.
 - Re-attaching to a session already in progress now shows its conversation instead of an empty transcript.
 - Reloading a session's history while a turn is running no longer drops the reply being written or the tool card still spinning.
 - Starting a chat in a folder used earlier in the same run no longer silently re-attaches to that earlier chat.
