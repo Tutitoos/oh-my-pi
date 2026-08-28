@@ -24,9 +24,18 @@ export interface UseBridgeResult {
  * Boot steps report rather than vanish. Each is idempotent and non-fatal, so the
  * boot continues — but a swallowed failure here is how a tab ends up blank with
  * nothing anywhere saying why.
+ *
+ * It goes through the bridge's own error, not `console.warn`: the two steps that
+ * use this are the ones that decide what the transcript shows, and a packaged
+ * webview has no console anyone will ever open. A failed history reload over a
+ * live session renders as a fresh empty chat, which is the one wrong answer the
+ * user cannot tell from a right one.
  */
-function reportBootFailure(cause: unknown): void {
-	console.warn("omp: a session boot step failed", cause);
+function reportBootFailure(bridge: RpcBridge, step: string) {
+	return (cause: unknown): void => {
+		console.warn(`omp: ${step} failed`, cause);
+		bridge.reportError(new Error(`${step} failed: ${cause instanceof Error ? cause.message : String(cause)}`));
+	};
 }
 
 export function useBridge(
@@ -80,7 +89,7 @@ export function useBridge(
 		 * turn.
 		 */
 		if (sessionPath && !handle?.resumed) {
-			await bridge.switchSession(sessionPath).catch(reportBootFailure);
+			await bridge.switchSession(sessionPath).catch(reportBootFailure(bridge, "Switching to this session"));
 		} else if (handle?.resumed) {
 			/*
 			 * A re-attached process has a conversation and this bridge has an empty
@@ -93,7 +102,7 @@ export function useBridge(
 			 * session is streaming or compacting (`session_busy`) — precisely the
 			 * case this exists to cover. `get_messages` carries no such guard.
 			 */
-			await bridge.reloadMessages().catch(reportBootFailure);
+			await bridge.reloadMessages().catch(reportBootFailure(bridge, "Reloading this session's history"));
 		}
 		// Last, and only now: `switch_session` aborts the session, which takes any
 		// `bash` already in flight with it. The panels watch this rather than

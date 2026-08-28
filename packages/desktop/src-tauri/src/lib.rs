@@ -202,18 +202,41 @@ fn send(sink: &Sink, mut event: AgentEvent) {
 // State
 // ---------------------------------------------------------------------------
 
+/// When this child last moved bytes in EITHER direction, shared with its pump.
+///
+/// It used to be a plain field on `Session`, which meant only the command
+/// handlers could write it — and they see stdin. A tab left streaming in the
+/// background sends nothing, so its stamp froze at the prompt that started the
+/// turn and it became the oldest thing in the pool: opening a fourth tab killed
+/// the one session that was actually working, losing the turn in flight. Output
+/// is traffic too, and the pump is what sees it.
+type Activity = Arc<Mutex<Instant>>;
+
+fn touch(activity: &Activity) {
+	if let Ok(mut at) = activity.lock() {
+		*at = Instant::now();
+	}
+}
+
+/// A poisoned stamp reads as "just now" so eviction passes over it rather than
+/// picking, as its very first victim, the one session we cannot reason about.
+fn last_active(activity: &Activity) -> Instant {
+	activity.lock().map(|at| *at).unwrap_or_else(|_| Instant::now())
+}
+
 struct Session {
 	child: CommandChild,
 	pid: u32,
 	sink: Sink,
 	/// Drives LRU eviction when the pool is at capacity.
-	last_active: Instant,
+	activity: Activity,
 }
 
 struct Prewarmed {
 	child: CommandChild,
 	pid: u32,
 	sink: Sink,
+	activity: Activity,
 }
 
 #[derive(Default)]
@@ -296,10 +319,12 @@ impl LineAssembler {
 // Pump
 // ---------------------------------------------------------------------------
 
-fn flush_batch(sink: &Sink, batch: &mut Vec<String>, bytes: &mut usize) {
+fn flush_batch(sink: &Sink, activity: &Activity, batch: &mut Vec<String>, bytes: &mut usize) {
 	if batch.is_empty() {
 		return;
 	}
+	// Streaming output is what keeps a background turn out of the eviction pool.
+	touch(activity);
 	*bytes = 0;
 	send(
 		sink,
@@ -314,7 +339,7 @@ fn flush_batch(sink: &Sink, batch: &mut Vec<String>, bytes: &mut usize) {
 /// `block_on(tx.send(..))`. That is useful backpressure onto the child's
 /// stdout, but it also means anything slow here stalls the child. Keep it
 /// tight: no locks held across await, no I/O.
-async fn pump(app: AppHandle, sink: Sink, mut rx: Receiver<CommandEvent>) {
+async fn pump(app: AppHandle, sink: Sink, activity: Activity, mut rx: Receiver<CommandEvent>) {
 	let mut out_asm = LineAssembler::default();
 	let mut err_asm = LineAssembler::default();
 	let mut lines: Vec<String> = Vec::new();
@@ -336,7 +361,7 @@ async fn pump(app: AppHandle, sink: Sink, mut rx: Receiver<CommandEvent>) {
 							 bytes += line.len() + 4; // + JSON quoting/comma overhead
 							 batch.push(line);
 							 if bytes >= MAX_BATCH_BYTES {
-								  flush_batch(&sink, &mut batch, &mut bytes);
+								  flush_batch(&sink, &activity, &mut batch, &mut bytes);
 							 }
 						}
 				  }
@@ -347,7 +372,7 @@ async fn pump(app: AppHandle, sink: Sink, mut rx: Receiver<CommandEvent>) {
 						err_asm.push(&chunk, true, &mut lines);
 						if !lines.is_empty() {
 							 // Flush stdout first so interleaving is preserved.
-							 flush_batch(&sink, &mut batch, &mut bytes);
+							 flush_batch(&sink, &activity, &mut batch, &mut bytes);
 							 send(&sink, AgentEvent::Stderr {
 								  tab_id: String::new(),
 								  lines: std::mem::take(&mut lines),
@@ -355,14 +380,14 @@ async fn pump(app: AppHandle, sink: Sink, mut rx: Receiver<CommandEvent>) {
 						}
 				  }
 				  Some(CommandEvent::Error(message)) => {
-						flush_batch(&sink, &mut batch, &mut bytes);
+						flush_batch(&sink, &activity, &mut batch, &mut bytes);
 						send(&sink, AgentEvent::Fault { tab_id: String::new(), message });
 				  }
 				  Some(CommandEvent::Terminated(payload)) => {
 						lines.clear();
 						out_asm.flush(&mut lines);
 						batch.append(&mut lines);
-						flush_batch(&sink, &mut batch, &mut bytes);
+						flush_batch(&sink, &activity, &mut batch, &mut bytes);
 
 						lines.clear();
 						err_asm.flush(&mut lines);
@@ -381,7 +406,7 @@ async fn pump(app: AppHandle, sink: Sink, mut rx: Receiver<CommandEvent>) {
 						break;
 				  }
 				  None => {
-						flush_batch(&sink, &mut batch, &mut bytes);
+						flush_batch(&sink, &activity, &mut batch, &mut bytes);
 						break;
 				  }
 				  // CommandEvent is #[non_exhaustive]: this arm is REQUIRED to
@@ -389,7 +414,7 @@ async fn pump(app: AppHandle, sink: Sink, mut rx: Receiver<CommandEvent>) {
 				  _ => {}
 			 },
 
-			 _ = tick.tick() => flush_batch(&sink, &mut batch, &mut bytes),
+			 _ = tick.tick() => flush_batch(&sink, &activity, &mut batch, &mut bytes),
 		}
 	}
 
@@ -410,7 +435,12 @@ async fn pump(app: AppHandle, sink: Sink, mut rx: Receiver<CommandEvent>) {
 			if ours {
 				pool.sessions.remove(&label);
 			}
-			if label == PREWARM_LABEL {
+			// Same identity rule for the spare. Clearing it by label alone let a
+			// dead spare's pump erase a *newer* one that had already been spawned
+			// and stored, leaving that process running with nothing pointing at it.
+			if label == PREWARM_LABEL
+				&& pool.prewarm.as_ref().is_some_and(|spare| Arc::ptr_eq(&spare.sink, &sink))
+			{
 				pool.prewarm = None;
 			}
 		}
@@ -437,7 +467,7 @@ fn spawn_sidecar(
 	app: &AppHandle,
 	label: &str,
 	cwd: Option<&str>,
-) -> Result<(CommandChild, u32, Sink), String> {
+) -> Result<(CommandChild, u32, Sink, Activity), String> {
 	let mut command = app
 		.shell()
 		.sidecar(SIDECAR_NAME)
@@ -463,8 +493,9 @@ fn spawn_sidecar(
 
 	let pid = child.pid();
 	let sink = new_buffering_sink(label);
-	tauri::async_runtime::spawn(pump(app.clone(), Arc::clone(&sink), rx));
-	Ok((child, pid, sink))
+	let activity: Activity = Arc::new(Mutex::new(Instant::now()));
+	tauri::async_runtime::spawn(pump(app.clone(), Arc::clone(&sink), Arc::clone(&activity), rx));
+	Ok((child, pid, sink, activity))
 }
 
 /// Top the spare back up, off the caller's critical path.
@@ -484,7 +515,7 @@ fn schedule_prewarm(app: &AppHandle) {
 				return;
 			}
 		}
-		let Ok((child, pid, sink)) = spawn_sidecar(&app, PREWARM_LABEL, None) else {
+		let Ok((child, pid, sink, activity)) = spawn_sidecar(&app, PREWARM_LABEL, None) else {
 			return;
 		};
 		let Ok(mut pool) = state.0.lock() else {
@@ -496,8 +527,22 @@ fn schedule_prewarm(app: &AppHandle) {
 			let _ = child.kill();
 			return;
 		}
-		pool.prewarm = Some(Prewarmed { child, pid, sink });
+		pool.prewarm = Some(Prewarmed { child, pid, sink, activity });
 	});
+}
+
+/// Give the spare back once the pool is full. The spare is a real ~285 MB
+/// runtime, so `MAX_LIVE_SESSIONS` has to count it or the ceiling is a fiction:
+/// two live sessions plus a spare is already three processes, and opening a
+/// third *project* session cannot adopt the spare — a child's working directory
+/// is fixed at spawn — so it spawned a fourth. `schedule_prewarm` refuses to
+/// start one at capacity; this is the other half of that rule.
+fn trim_prewarm(pool: &mut Pool) {
+	if pool.sessions.len() >= MAX_LIVE_SESSIONS {
+		if let Some(spare) = pool.prewarm.take() {
+			let _ = spare.child.kill();
+		}
+	}
 }
 
 /// Evict the least-recently-used session so a new one fits. Never evicts
@@ -507,7 +552,7 @@ fn evict_lru(pool: &mut Pool, keep: &str) -> Option<String> {
 		.sessions
 		.iter()
 		.filter(|(label, _)| label.as_str() != keep)
-		.min_by_key(|(_, session)| session.last_active)
+		.min_by_key(|(_, session)| last_active(&session.activity))
 		.map(|(label, _)| label.clone())?;
 	let session = pool.sessions.remove(&victim)?;
 	// Announce before killing, so the tab knows the exit that follows was ours.
@@ -536,7 +581,7 @@ fn agent_start(
 
 	// Already running: re-point the stream at the new Channel.
 	if let Some(existing) = pool.sessions.get_mut(&tab_id) {
-		existing.last_active = Instant::now();
+		touch(&existing.activity);
 		let sink = Arc::clone(&existing.sink);
 		let pid = existing.pid;
 		drop(pool);
@@ -552,11 +597,9 @@ fn agent_start(
 	// started in the app's cwd and a child's working directory cannot be changed
 	// after spawn.
 	if cwd.is_none() {
-		if let Some(Prewarmed { child, pid, sink }) = pool.prewarm.take() {
-			pool.sessions.insert(
-				tab_id.clone(),
-				Session { child, pid, sink: Arc::clone(&sink), last_active: Instant::now() },
-			);
+		if let Some(Prewarmed { child, pid, sink, activity }) = pool.prewarm.take() {
+			touch(&activity);
+			pool.sessions.insert(tab_id.clone(), Session { child, pid, sink: Arc::clone(&sink), activity });
 			drop(pool);
 			adopt(&sink, &tab_id, on_event)?;
 			schedule_prewarm(&app);
@@ -566,7 +609,7 @@ fn agent_start(
 
 	drop(pool); // never hold a std guard across the spawn boundary
 
-	let (child, pid, sink) = spawn_sidecar(&app, &tab_id, cwd.as_deref())?;
+	let (child, pid, sink, activity) = spawn_sidecar(&app, &tab_id, cwd.as_deref())?;
 
 	let mut pool = sessions.0.lock().map_err(|_| "sessions mutex poisoned")?;
 	/*
@@ -579,7 +622,7 @@ fn agent_start(
 	 * loser kills its own child and attaches to the winner's.
 	 */
 	if let Some(existing) = pool.sessions.get_mut(&tab_id) {
-		existing.last_active = Instant::now();
+		touch(&existing.activity);
 		let winner = Arc::clone(&existing.sink);
 		let winner_pid = existing.pid;
 		drop(pool);
@@ -588,9 +631,8 @@ fn agent_start(
 		return Ok(AgentHandle { pid: winner_pid, resumed: true, prewarmed: false });
 	}
 
-	pool
-		.sessions
-		.insert(tab_id.clone(), Session { child, pid, sink: Arc::clone(&sink), last_active: Instant::now() });
+	pool.sessions.insert(tab_id.clone(), Session { child, pid, sink: Arc::clone(&sink), activity });
+	trim_prewarm(&mut pool);
 	drop(pool);
 	adopt(&sink, &tab_id, on_event)?;
 
@@ -608,7 +650,7 @@ fn agent_send(sessions: State<'_, Sessions>, tab_id: String, line: String) -> Re
 		.sessions
 		.get_mut(&tab_id)
 		.ok_or_else(|| format!("no live session for tab {tab_id}"))?;
-	session.last_active = Instant::now();
+	touch(&session.activity);
 
 	let mut buf = line.into_bytes();
 	if buf.last() != Some(&b'\n') {

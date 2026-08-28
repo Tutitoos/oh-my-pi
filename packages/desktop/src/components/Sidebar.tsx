@@ -429,7 +429,17 @@ function DeletePrompt({
 			 */
 			const tab = findOpenTab(tabs, session);
 			const bridge = bridgeFor(tab?.tabId);
+			/*
+			 * A missing bridge is not proof of a missing process. The registry only
+			 * holds bridges for a MOUNTED `SessionRoute`, while the Rust pool keeps
+			 * the sidecar alive on purpose when you leave the route — so deleting
+			 * from Settings or onboarding found no bridge, skipped the stop, and
+			 * unlinked the jsonl out from under a running agent, whose next write
+			 * went to an open handle on a file with no name. Ask the pool, which is
+			 * the only thing that actually knows.
+			 */
 			if (bridge) await bridge.stop();
+			else if (tab) await invoke("agent_kill", { tabId: tab.tabId });
 			await invoke("delete_session", { path: session.path });
 			// And forget the tab, or the next refresh lists it again as an unsaved
 			// chat — the row you just deleted, back under another name.

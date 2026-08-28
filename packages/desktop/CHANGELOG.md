@@ -18,6 +18,10 @@
 - Pressing Escape to dismiss a menu or the expanded composer no longer aborts the running turn.
 - The file tree's context menu now opens.
 - Cut and paste in the text menu now act on the field you opened the menu in.
+- Deleting a session now stops its process even when the session route is not mounted; the transcript used to be unlinked from under a running agent whose next write went to a file with no name.
+- A background turn is no longer the first thing evicted when a fourth tab opens: the pool now counts streaming output as activity, not just what the app types.
+- The pre-warmed spare counts against the three-process ceiling instead of quietly making it four.
+- A failed history reload on re-attach now says so in the tab, instead of rendering a live session as an empty new chat.
 - Returning to a session after visiting Settings no longer aborts the turn that was running.
 - Re-attaching to a session already in progress now shows its conversation instead of an empty transcript.
 - Starting a chat in a folder used earlier in the same run no longer silently re-attaches to that earlier chat.
