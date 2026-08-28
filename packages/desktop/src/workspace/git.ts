@@ -308,7 +308,12 @@ export function splitStatus(raw: string): Array<Omit<ChangedFile, "additions" | 
 		const index = record[0];
 		const worktree = record[1];
 		const path = record.slice(3);
-		const isRename = index === "R" || index === "C";
+		// Either column can carry the rename. `git add -N <newpath>` after a rename
+		// pairs it on the worktree side, so git writes ` R new\0old\0` — blank index
+		// column, old path still following as its own record. Keying off the index
+		// alone left that record to be parsed as a file of its own, so the panel grew
+		// a phantom row whose path was the old path minus its first three characters.
+		const isRename = index === "R" || index === "C" || worktree === "R" || worktree === "C";
 
 		out.push({
 			path,

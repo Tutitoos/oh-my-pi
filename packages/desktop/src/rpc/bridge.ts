@@ -400,6 +400,31 @@ export class RpcBridge {
 		}
 	}
 
+	/**
+	 * A process that is gone is not mid-turn.
+	 *
+	 * `#state` is a photograph taken at the last `get_state`, and the only thing
+	 * that retakes it is a live child answering another one. A turn that was
+	 * running when the child died therefore left `isStreaming` true in it forever
+	 * — the refresh is driven by `turn_end`, which will never arrive — and
+	 * everything that asks whether this session is busy reads that flag: the
+	 * sidebar's activity dot, the close guard's "an agent is still working"
+	 * prompt, the composer showing Stop where Send belongs, Escape-to-abort.
+	 *
+	 * Called from all three terminal arms, `fault` included: that one leaves the
+	 * status on `error`, for which the session pane offers neither the Restart
+	 * button nor the resume banner, so nothing else would ever correct it.
+	 *
+	 * Copied rather than mutated, because `getSnapshot` hands `state` out by
+	 * reference. Guarded so a state that is already settled keeps its object
+	 * identity and does not churn memoised consumers. Callers must `#touch()`.
+	 */
+	#clearLiveState(): void {
+		const state = this.#state;
+		if (!state || (!state.isStreaming && !state.isCompacting)) return;
+		this.#state = { ...state, isStreaming: false, isCompacting: false };
+	}
+
 	// -- inbound -------------------------------------------------------------
 
 	#onRelayEvent(event: RelayEvent): void {
@@ -415,6 +440,7 @@ export class RpcBridge {
 				this.#setStatus("error");
 				this.#error = event.data.message;
 				this.#failPending(new Error(event.data.message));
+				this.#clearLiveState();
 				this.#abandonCompaction();
 				this.#touch();
 				break;
@@ -422,6 +448,7 @@ export class RpcBridge {
 				this.#setStatus("suspended");
 				this.#exitExpected = true;
 				this.#failPending(new Error("session suspended to free a slot"));
+				this.#clearLiveState();
 				this.#abandonCompaction();
 				this.#touch();
 				break;
@@ -434,6 +461,7 @@ export class RpcBridge {
 				this.#setStatus("exited");
 				this.#exit = { code: event.data.code, signal: event.data.signal };
 				this.#failPending(new Error(`sidecar exited (code ${event.data.code ?? "?"})`));
+				this.#clearLiveState();
 				this.#abandonCompaction();
 				this.#touch();
 				break;

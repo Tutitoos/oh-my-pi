@@ -45,6 +45,40 @@ describe("status records", () => {
 		expect(parsed[1].path).toBe("other.ts");
 	});
 
+	/*
+	 * Recorded from git 2.55, not invented: `mv a.txt b.txt && git add -N b.txt`,
+	 * then the exact command `changedFiles` runs —
+	 * `status --porcelain=v1 -z --untracked-files=all | tr '\000' '\n'`.
+	 * Rename detection is on by default and covers the index-vs-worktree diff too,
+	 * so the pairing lands on the worktree column with a blank index column, and
+	 * the old path still follows as its own record.
+	 */
+	test("a worktree-side rename consumes its old path as well", () => {
+		const parsed = splitStatus(" R b.txt\na.txt\n");
+		expect(parsed).toHaveLength(1);
+		expect(parsed[0]).toMatchObject({ path: "b.txt", from: "a.txt", status: "renamed", staged: false });
+	});
+
+	test("a listing with a rename on each side stays two files", () => {
+		// `git mv a.txt b.txt` then `mv b.txt e.txt && git add -N e.txt`: git emits
+		// both renames, four records. Missing the second old path made the parser
+		// slice "b.txt" as if it were a status record and emit a file named "xt".
+		const parsed = splitStatus("R  b.txt\na.txt\n R e.txt\nb.txt\n");
+		expect(parsed.map(entry => [entry.path, entry.from])).toEqual([
+			["b.txt", "a.txt"],
+			["e.txt", "b.txt"],
+		]);
+		expect(parsed.map(entry => entry.staged)).toEqual([true, false]);
+	});
+
+	test("a copy detected on the worktree side consumes its source path", () => {
+		// Same shape with `status.renames=copies` in a user's config: recorded as
+		// ` M a.txt\0 C d.txt\0a.txt\0`.
+		const parsed = splitStatus(" M a.txt\n C d.txt\na.txt\n");
+		expect(parsed).toHaveLength(2);
+		expect(parsed[1]).toMatchObject({ path: "d.txt", from: "a.txt", status: "renamed" });
+	});
+
 	test("staged is read from the index column, not the worktree one", () => {
 		expect(splitStatus("M  a.ts")[0].staged).toBe(true);
 		expect(splitStatus(" M a.ts")[0].staged).toBe(false);

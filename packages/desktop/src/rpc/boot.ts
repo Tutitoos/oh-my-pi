@@ -135,9 +135,7 @@ export async function bootSession(bridge: RpcBridge, options: { sessionPath?: st
 		 * throwaway. `readOneshotReplies` already refuses on this exact shape for
 		 * the unmounted path; this is the mounted one agreeing with it.
 		 */
-		const switched = await bridge
-			.switchSession(target)
-			.catch(reportBootFailure(bridge, "Opening this session"));
+		const switched = await bridge.switchSession(target).catch(reportBootFailure(bridge, "Opening this session"));
 		if (switched?.cancelled) {
 			bridge.reportError(new Error("Opening this session was refused, so this tab is not showing it."));
 		}

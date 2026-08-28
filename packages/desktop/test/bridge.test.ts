@@ -1158,3 +1158,53 @@ describe("RpcBridge — a prompt that lands mid-turn", () => {
 		expect(bridge.getSnapshot().error).toBe("No model selected");
 	});
 });
+
+/**
+ * `#state` is a photograph, and `get_state` is the only thing that retakes it.
+ *
+ * A turn that was running when the child died therefore left `isStreaming` true
+ * in that photograph forever — the refresh is driven by `turn_end`, which a dead
+ * process never sends. Everything that asks whether a session is busy reads that
+ * flag: the sidebar's dot, the close guard, the composer's Stop button.
+ */
+describe("RpcBridge — a dead process is not mid-turn", () => {
+	async function midTurn() {
+		const { transport, bridge } = await connected();
+		void bridge.getState();
+		await settle();
+		transport.frames({
+			type: "response",
+			id: transport.idOf(0),
+			command: "get_state",
+			success: true,
+			data: { isStreaming: true, isCompacting: false, sessionId: "s" },
+		});
+		await settle();
+		expect(bridge.getSnapshot().state?.isStreaming).toBe(true);
+		return { transport, bridge };
+	}
+
+	test("a crash clears the streaming flag along with the status", async () => {
+		const { transport, bridge } = await midTurn();
+		transport.exit(1);
+		await settle();
+		expect(bridge.getSnapshot().status).toBe("exited");
+		expect(bridge.getSnapshot().state?.isStreaming).toBe(false);
+	});
+
+	test("so does an eviction, which is the routine kill rather than the rare one", async () => {
+		const { transport, bridge } = await midTurn();
+		transport.evict();
+		await settle();
+		expect(bridge.getSnapshot().status).toBe("suspended");
+		expect(bridge.getSnapshot().state?.isStreaming).toBe(false);
+	});
+
+	test("and a relay fault, which is the one death nothing else corrects", async () => {
+		const { transport, bridge } = await midTurn();
+		transport.fault("relay went away");
+		await settle();
+		expect(bridge.getSnapshot().status).toBe("error");
+		expect(bridge.getSnapshot().state?.isStreaming).toBe(false);
+	});
+});

@@ -139,7 +139,15 @@ function SessionView({
 	// than the session state and is not worth polling for mid-turn.
 	const wasStreaming = useRef(false);
 	useEffect(() => {
-		if (wasStreaming.current && !streaming) {
+		/*
+		 * Only a live process finishes a turn. A crash, a kill or an eviction now
+		 * lowers `isStreaming` as well, and that falling edge is a death rather
+		 * than a completion: unguarded, a sidecar that dies in the background
+		 * announces "the agent finished working" to the OS notification centre.
+		 * A positive test on `ready` rather than a list of terminal statuses, so
+		 * a status added later cannot silently rejoin this branch.
+		 */
+		if (wasStreaming.current && !streaming && snapshot.status === "ready") {
 			notifyTurnComplete(snapshot.state?.model?.id);
 			void bridge
 				.getSessionStats()
@@ -147,7 +155,7 @@ function SessionView({
 				.catch(() => {});
 		}
 		wasStreaming.current = streaming;
-	}, [streaming, snapshot.state?.model?.id, bridge]);
+	}, [streaming, snapshot.status, snapshot.state?.model?.id, bridge]);
 
 	const pendingUiId = snapshot.pendingUi?.id;
 	useEffect(() => {

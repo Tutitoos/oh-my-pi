@@ -29,6 +29,8 @@
 - Renaming or exporting a session whose process is running but whose view is not open now refuses instead of starting a second agent on the same transcript.
 - "Stop the process" works from Settings and the other non-session screens, where it used to do nothing while the sidecar kept running.
 - The working indicator's dots are round again; the previous fix lost to the flattener on specificity while claiming to have won.
+- A session whose process dies mid-turn no longer keeps showing as working, blocking the window close and offering Stop where Send belongs.
+- A rename detected on the worktree side is read as a rename instead of producing a phantom file with a truncated name.
 - Opening a session that the agent refuses to switch to now says so, instead of showing that session's name over a different one.
 - Deleting a session now stops its process even when the session route is not mounted; the transcript used to be unlinked from under a running agent whose next write went to a file with no name.
 - Renaming or exporting a session from Settings no longer starts a second agent on a transcript the running one still has open; the menu says to open the session first.
