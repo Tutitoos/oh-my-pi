@@ -76,7 +76,7 @@ that way and are not listed.
   spelling of its real directory now refuses to open rather than renaming the
   wrong one — correct, but with no workaround from the UI while it is closed.
 
-- [ ] **A4 · A rejected send silently eats the composed message**
+- [x] **A4 · A rejected send silently eats the composed message**
   `src/components/composer/useComposerDraft.ts` — `submit` revokes the object
   URLs and clears draft, attachments and references *before* awaiting the send,
   and the await's `.catch` is empty. `prompt()` carries no `streamingBehavior`,
@@ -84,9 +84,12 @@ that way and are not listed.
   streaming; the composer picks prompt-vs-steer from a snapshot that refreshes
   only on state-changing events, so a submit in the window between a turn
   starting server-side and the client noticing is rejected and lost.
-  **Done when:** a send that rejects leaves the draft and its attachments exactly
-  as they were and shows the reason; the previews of restored attachments still
-  render, and nothing leaks on the success path.
+  Closed three ways, because the named trigger turned out not to reach the client
+  at all: the server acknowledges `prompt` before the turn starts, so a later
+  `AgentBusyError` arrives as a second response on the same id and the bridge
+  dropped it as a late frame. So: `prompt` now carries `streamingBehavior`, the
+  bridge surfaces a post-acknowledgement failure, and the draft is given up only
+  after the send lands.
 
 - [x] **A5 · Reloading history mid-stream loses the reply being written**
   `src/rpc/transcript.ts` — I had this backwards, and the design corrected me: the

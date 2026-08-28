@@ -202,6 +202,7 @@ export function ComposerModal({ composer }: { composer: ComposerDraft }) {
 							data-variant="ghost"
 							data-size="normal"
 							title="Abort the current turn"
+							disabled={composer.sending}
 							onClick={() => void composer.submit()}
 						>
 							Steer
@@ -212,6 +213,7 @@ export function ComposerModal({ composer }: { composer: ComposerDraft }) {
 							data-component="button"
 							data-variant="primary"
 							data-size="normal"
+							disabled={composer.sending}
 							onClick={() => void composer.submit()}
 						>
 							Send

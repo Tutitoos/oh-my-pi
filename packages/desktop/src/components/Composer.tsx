@@ -97,7 +97,7 @@ export function Composer({
 						data-component="button"
 						data-size="normal"
 						data-variant="primary"
-						disabled={disabled}
+						disabled={disabled || composer.sending}
 						onClick={() => void composer.submit()}
 					>
 						Send

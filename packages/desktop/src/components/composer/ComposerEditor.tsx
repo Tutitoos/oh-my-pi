@@ -20,11 +20,17 @@ export function ComposerEditor({
 	disabled?: boolean;
 }) {
 	const { draft, changeDraft, matches, editorRef, selection, pendingCaret } = composer;
+	/*
+	 * A send that has not landed yet owns this draft. It is no longer cleared
+	 * before the round trip, so without this a second Enter would send it twice
+	 * and anything typed meanwhile would edit text already on the wire.
+	 */
+	const busy = disabled || composer.sending;
 
 	/*
 	 * Take focus and put the caret back where it was, in both directions.
 	 *
-	 * Keyed on `variant` and `disabled`, not on the refs. Refs never change
+	 * Keyed on `variant` and `busy`, not on the refs. Refs never change
 	 * identity, so this ran exactly once — during the first commit, while the
 	 * session was still booting and the textarea was `disabled`. `focus()` on a
 	 * disabled element does nothing, and nothing ever tried again: the composer
@@ -34,7 +40,7 @@ export function ComposerEditor({
 	 */
 	useLayoutEffect(() => {
 		const node = editorRef.current;
-		if (!node || disabled) return;
+		if (!node || busy) return;
 		/*
 		 * Never take focus away from something else the user is using. This effect
 		 * now runs when the textarea stops being disabled — which is when the
@@ -54,7 +60,7 @@ export function ComposerEditor({
 
 		node.focus();
 		node.setSelectionRange(selection.current.start, selection.current.end);
-	}, [editorRef, selection, variant, disabled]);
+	}, [editorRef, selection, variant, busy]);
 
 	/**
 	 * Grow to fit the draft — inline only. In the modal the box is already as
@@ -117,7 +123,7 @@ export function ComposerEditor({
 			aria-activedescendant={matches.length > 0 ? `${composer.slashListId}-${composer.highlight}` : undefined}
 			aria-autocomplete="list"
 			data-dropping={composer.dropping || undefined}
-			disabled={disabled}
+			disabled={busy}
 			placeholder={disabled ? "Waiting for the agent…" : composer.streaming ? "Steer the agent…" : "Ask omp…"}
 			value={draft}
 			rows={1}

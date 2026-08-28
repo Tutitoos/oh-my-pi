@@ -30,6 +30,59 @@ export interface Attachment {
  */
 let attachmentSeq = 0;
 
+/** What the composer hands `prompt(message, images)` for each attachment. */
+export interface ComposerImage {
+	type: "image";
+	data: string;
+	mimeType: string;
+}
+
+/** The draft exactly as it stood when Send was pressed. */
+export interface DraftContents {
+	draft: string;
+	attachments: readonly Attachment[];
+	references: readonly string[];
+}
+
+/** Everything `sendDraft` is allowed to touch, so the order can be tested. */
+export interface DraftSink {
+	send(message: string, images: ComposerImage[] | undefined): Promise<void>;
+	/** Drop exactly what went out, and revoke its previews. */
+	clear(sent: DraftContents): void;
+	/** Somewhere the user will actually see it — the session's error banner. */
+	reportError(cause: unknown): void;
+}
+
+/**
+ * Send the draft, and give it up only once the send has landed.
+ *
+ * The order is the whole point. Everything used to be cleared — and every
+ * object URL revoked — before the await, with the rejection swallowed by an
+ * empty catch. A send refused because the sidecar was still coming up, or
+ * evicted mid-flight to free a pool slot, took the message with it and left no
+ * trace that anything had happened.
+ *
+ * Module-level and injected rather than written inline in the hook, because
+ * this ordering is the part that keeps going wrong and inside a hook it is only
+ * reachable through a real React tree — which this package has no test
+ * environment for. Same reason `keymap.ts` exists.
+ */
+export async function sendDraft(message: string, contents: DraftContents, sink: DraftSink): Promise<void> {
+	const images = contents.attachments.map(attachment => ({
+		type: "image" as const,
+		data: attachment.data,
+		mimeType: attachment.mimeType,
+	}));
+	try {
+		await sink.send(message, images.length ? images : undefined);
+	} catch (cause) {
+		const reason = cause instanceof Error ? cause.message : String(cause);
+		sink.reportError(new Error(`Could not send that message, so it is still in the composer: ${reason}`));
+		return;
+	}
+	sink.clear(contents);
+}
+
 /**
  * Everything the composer's two surfaces share.
  *
@@ -61,6 +114,8 @@ export interface ComposerDraft {
 	removeAttachment(id: string): void;
 	removeReference(path: string): void;
 	submit(): Promise<void>;
+	/** A send is on the wire and the draft has not been given up yet. */
+	sending: boolean;
 	streaming: boolean;
 	editorRef: RefObject<HTMLTextAreaElement | null>;
 	/** Where the caret was, so it survives the move between surfaces. */
@@ -106,6 +161,7 @@ export function useComposerDraft({
 	const [expanded, setExpanded] = useState(false);
 	const [slashDismissed, setSlashDismissed] = useState(false);
 	const [notice, setNotice] = useState<string | null>(null);
+	const [sending, setSending] = useState(false);
 
 	/** The one mounted textarea, whichever surface is rendering it. */
 	const editorRef = useRef<HTMLTextAreaElement>(null);
@@ -119,6 +175,13 @@ export function useComposerDraft({
 	 * message goes out would otherwise reappear attached to the *next* message.
 	 */
 	const generation = useRef(0);
+	/**
+	 * The same fact as `sending`, kept where it can be read without a render.
+	 * The draft now survives the round trip, so a submit reaching this from a
+	 * control the `disabled` attribute does not cover would send it a second
+	 * time — and `submit` reads a render-stale `sending` from its own closure.
+	 */
+	const sendingRef = useRef(false);
 	/** Unique per composer, so N open sessions do not share element ids. */
 	const slashListId = useId();
 
@@ -281,22 +344,56 @@ export function useComposerDraft({
 	);
 
 	const submit = useCallback(async () => {
+		if (sendingRef.current) return;
 		const message = composeMessage(draft, references);
 		if (!message && attachments.length === 0) return;
 
-		const images = attachments.map(a => ({ type: "image", data: a.data, mimeType: a.mimeType }));
-		generation.current++; // this draft is gone; late reads belong to nothing
-		for (const attachment of attachments) URL.revokeObjectURL(attachment.previewUrl);
-
-		setDraft("");
-		setAttachments([]);
-		setReferences([]);
-		setNotice(null);
-		setExpanded(false);
-
-		// While a turn is running, `steer` injects into it; `prompt` would queue.
-		const send = streaming ? bridge.steer.bind(bridge) : bridge.prompt.bind(bridge);
-		await send(message, images.length ? images : undefined).catch(() => {});
+		/*
+		 * Bumped here, not on the clear. This message has already taken its images;
+		 * a paste or a drop still decoding belongs to it and to nothing else, and
+		 * letting it land would attach it to the *next* message — which is the very
+		 * thing this counter was added to stop.
+		 */
+		generation.current++;
+		sendingRef.current = true;
+		setSending(true);
+		try {
+			await sendDraft(
+				message,
+				{ draft, attachments, references },
+				{
+					// While a turn is running, `steer` injects into it; `prompt` queues.
+					send: (text, images) => (streaming ? bridge.steer(text, images) : bridge.prompt(text, images)),
+					clear: sent => {
+						for (const attachment of sent.attachments) URL.revokeObjectURL(attachment.previewUrl);
+						/*
+						 * Remove exactly what went out rather than blanking. A file
+						 * dropped on the window during the round trip belongs to the next
+						 * message, and blanking would discard it and leak its preview.
+						 */
+						const sentIds = new Set(sent.attachments.map(attachment => attachment.id));
+						const sentPaths = new Set(sent.references);
+						setDraft(current => (current === sent.draft ? "" : current));
+						setAttachments(current => current.filter(attachment => !sentIds.has(attachment.id)));
+						setReferences(current => current.filter(path => !sentPaths.has(path)));
+						setNotice(null);
+						setExpanded(false);
+					},
+					reportError: cause => {
+						/*
+						 * Both surfaces. The banner lives in the session view and the
+						 * expanded dialog's backdrop covers it, so a send that failed out
+						 * of the modal left the draft sitting there with no reason given.
+						 */
+						bridge.reportError(cause);
+						setNotice(cause instanceof Error ? cause.message : String(cause));
+					},
+				},
+			);
+		} finally {
+			sendingRef.current = false;
+			setSending(false);
+		}
 	}, [attachments, bridge, draft, references, streaming]);
 
 	/**
@@ -346,6 +443,7 @@ export function useComposerDraft({
 		removeAttachment,
 		removeReference,
 		submit,
+		sending,
 		streaming,
 		editorRef,
 		selection,

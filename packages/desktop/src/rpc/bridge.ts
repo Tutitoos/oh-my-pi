@@ -494,7 +494,21 @@ export class RpcBridge {
 
 	#settle(frame: ResponseFrame): void {
 		const entry = this.#pending.get(frame.id);
-		if (!entry) return; // late response to a timed-out or abandoned request
+		if (!entry) {
+			/*
+			 * `prompt` answers twice. The server acknowledges the frame and only
+			 * then starts the turn — it has to, a turn runs for minutes — so a
+			 * prompt that fails after the acknowledgement (no model selected, an
+			 * image the provider will not take) comes back as a second response on
+			 * an id nothing is waiting for any more. Dropped as a late reply, the
+			 * message vanished and the composer had already been told it went.
+			 */
+			if (frame.success === false) {
+				this.#error = frame.error ?? "The agent refused that request.";
+				this.#touch();
+			}
+			return; // otherwise a late reply to a timed-out or abandoned request
+		}
 		this.#pending.delete(frame.id);
 		clearTimeout(entry.timer);
 
@@ -833,8 +847,18 @@ export class RpcBridge {
 
 	// -- typed surface, mirroring RpcClient ----------------------------------
 
+	/**
+	 * A prompt, and what to do with it if a turn is already running.
+	 *
+	 * `streamingBehavior` is not optional in practice. Without it the server
+	 * throws `AgentBusyError` for a prompt that arrives mid-turn, and this client
+	 * cannot know that it has: it chooses prompt-vs-steer from `state`, which is
+	 * only refreshed at turn and compaction boundaries, so every submit in the
+	 * window between a turn starting and that refresh landing was refused. The
+	 * terminal tags an ordinary Enter the same way, for the same race.
+	 */
 	async prompt(message: string, images?: unknown[]): Promise<void> {
-		await this.request({ type: "prompt", message, images });
+		await this.request({ type: "prompt", message, images, streamingBehavior: "steer" });
 	}
 
 	async steer(message: string, images?: unknown[]): Promise<void> {

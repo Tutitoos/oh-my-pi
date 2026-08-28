@@ -1123,3 +1123,38 @@ describe("RpcBridge — blocking UI requests", () => {
 		expect(bridge.getSnapshot().pendingUi).toBeNull();
 	});
 });
+
+describe("RpcBridge — a prompt that lands mid-turn", () => {
+	test("carries a streaming behaviour, so the server queues instead of refusing", async () => {
+		const { transport, bridge } = await connected();
+		void bridge.prompt("ship it");
+		await settle();
+
+		// The server throws `AgentBusyError` for a prompt that arrives while a turn
+		// is running and says nothing about what to do with it. This client picks
+		// prompt-vs-steer from a state snapshot refreshed only at turn boundaries,
+		// so it is wrong for the length of a round trip, every turn.
+		expect(JSON.parse(transport.sent[0])).toMatchObject({ type: "prompt", streamingBehavior: "steer" });
+	});
+
+	test("a failure arriving after the acknowledgement is not dropped in silence", async () => {
+		const { transport, bridge } = await connected();
+		const sent = bridge.prompt("ship it");
+		await settle();
+
+		// The handler acknowledges the frame and only then runs the turn, so both
+		// of these carry the same id and the second one has nothing to settle.
+		transport.frames({ type: "response", id: transport.idOf(0), command: "prompt", success: true });
+		await sent;
+		transport.frames({
+			type: "response",
+			id: transport.idOf(0),
+			command: "prompt",
+			success: false,
+			error: "No model selected",
+		});
+		await settle();
+
+		expect(bridge.getSnapshot().error).toBe("No model selected");
+	});
+});

@@ -49,3 +49,6 @@
 - Diff and file-tree paths work for a session running in a subdirectory of the repository.
 - A failed tool no longer draws the same marker as one that succeeded.
 - The composer grows with its text and the Send button no longer stretches with it.
+- A message the app could not hand off — an evicted or crashed session, a dead relay — now stays in the composer with the reason on screen, instead of being cleared into nothing.
+- A prompt refused after it was accepted now says why, instead of disappearing in silence.
+- Sending just as a turn begins no longer loses the message: prompts queue behind the running turn the way the terminal's do.
