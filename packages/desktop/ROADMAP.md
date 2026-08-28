@@ -216,8 +216,24 @@ that way and are not listed.
 - [ ] **C5 · No manual pass over a bundle built from current HEAD**
   The pool changes of the last round are compiled and reasoned about, not driven.
   A bundle from HEAD builds, launches, reports its window loaded and spawns a
-  sidecar with nothing refused (`bun run smoke --build`, run after the upstream
-  merge). What remains is the clicking, which nothing automates.
+  sidecar with nothing refused (`bun run smoke --build`, after the upstream
+  merge). Opened by hand as well, which confirmed more than the smoke test can:
+  the sidebar lists real sessions grouped by project — so `omp sessions --json`
+  works end to end through the relay, including the pi-vcs port — the
+  startup-progress notices and the process-exit banner render and say something
+  true, and quitting leaves zero sidecars behind.
+
+  **What is still unverified is the clicking, and the reason is the harness, not
+  the app:** synthetic clicks do not reach this bundle at all — not the webview,
+  not even its native traffic-light buttons — because it is an unsigned debug
+  bundle outside `/Applications`. So a person has to do this pass, or the bundle
+  has to be signed and installed first.
+
+  One thing that pass would want to know: on a machine whose prebuilt native
+  addon predates the pi-vcs crate, `resolveActiveRepoContext` fails and startup
+  takes over a minute cold. The app says so rather than hanging silently, which
+  is the behaviour that made this diagnosable at all.
+
   **Done when:** that bundle has been driven once through: opening a file under
   a dot-directory, a fourth tab forcing eviction, a native notification, and
   paste through the context menu.
