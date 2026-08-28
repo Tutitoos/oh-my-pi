@@ -143,6 +143,13 @@ that way and are not listed.
   `50%` in the running app, and the comment no longer claims a fix that is not
   there.
 
+- [x] **B8 · The pre-warmed spare could still be installed as a fourth process**
+  `src-tauri/src/lib.rs` — capacity was checked before a spawn that takes
+  seconds, and the post-spawn check asked only whether another spare had
+  appeared. A third project session inserted while the spare was starting left
+  it installed anyway, over the ceiling that the eviction path holds everywhere
+  else.
+
 ## P2 · Verification — things believed to work that nothing observes
 
 - [x] **C1 · The package's 266 tests run in no CI bucket**

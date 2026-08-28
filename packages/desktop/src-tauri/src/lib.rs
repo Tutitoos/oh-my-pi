@@ -526,8 +526,14 @@ fn schedule_prewarm(app: &AppHandle) {
 			let _ = child.kill();
 			return;
 		};
-		// Lost a race while spawning: another caller filled the slot.
-		if pool.prewarm.is_some() {
+		/*
+		 * Lost a race while spawning: another caller filled the slot, or — the
+		 * half this check used to miss — filled the pool. Capacity was tested
+		 * before a spawn that takes seconds, so a third project session inserted
+		 * in the meantime leaves this installing the spare as a fourth ~285 MB
+		 * process, which is the ceiling `trim_prewarm` exists to hold.
+		 */
+		if pool.prewarm.is_some() || pool.sessions.len() >= MAX_LIVE_SESSIONS {
 			let _ = child.kill();
 			return;
 		}
