@@ -73,13 +73,16 @@ that way and are not listed.
   as they were and shows the reason; the previews of restored attachments still
   render, and nothing leaks on the success path.
 
-- [ ] **A5 · Reloading history mid-stream duplicates the assistant's reply**
-  `src/rpc/transcript.ts` — `hydrate()` clears the model (resetting the index of
-  the message being streamed into) and rebuilds every entry as finished. Reloading
-  during a live turn — precisely what `reloadMessages` exists to serve, since
-  `get_messages` has no busy guard — leaves the in-flight message present but
-  unclaimed, so the next update for it appends a second bubble instead of
-  extending the first.
+- [x] **A5 · Reloading history mid-stream loses the reply being written**
+  `src/rpc/transcript.ts` — I had this backwards, and the design corrected me: the
+  server does not put the in-flight message in a `get_messages` answer at all
+  (it is appended on `message_end`), so a mid-turn reload **deletes** the reply
+  rather than duplicating it — and deletes a running tool card along with the
+  handle its result would have landed on. The duplicate is real too, but arrives
+  from the other side: the relay coalesces frames, so `hydrate` can land behind
+  frames that logically follow it. One fix covers all three — an entry now keeps
+  the identity its frame carries, and `hydrate` carries the in-flight tail across
+  the rebuild.
   **Done when:** a `TranscriptModel` test hydrates a transcript whose tail is
   still streaming, applies the next update for that same message, and ends with
   one entry. The test must fail if the fix is reverted.

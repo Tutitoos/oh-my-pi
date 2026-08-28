@@ -61,6 +61,12 @@ export interface MessageEntry {
 	content: ContentBlock[];
 	/** Still streaming — no `message_end` seen yet. */
 	streaming: boolean;
+	/**
+	 * When the server stamped the message. Stable across `message_start`,
+	 * `message_update` and `message_end` — the only identity a message frame
+	 * carries, and the one thing that survives a `hydrate`.
+	 */
+	timestamp?: number;
 }
 
 export interface ToolEntry {
@@ -97,6 +103,21 @@ export interface CompactionEntry {
 
 export type TranscriptEntry = MessageEntry | ToolEntry | CompactionEntry;
 
+/**
+ * What a reload cannot see.
+ *
+ * The server appends an assistant message only at `message_end`, and a tool
+ * only once its `toolResult` lands, so whatever is in flight when
+ * `get_messages` answers is missing from the answer by construction. `hydrate`
+ * used to drop it along with the handles the frames that follow need:
+ * `#toolIndex` no longer knew the running call, so its `tool_execution_end`
+ * was discarded and the card never came back.
+ */
+interface LiveTail {
+	message: MessageEntry | null;
+	tools: ToolEntry[];
+}
+
 /** Roles whose messages are rendered. Tool results render as tool cards. */
 const RENDERED_ROLES = new Set(["user", "assistant"]);
 
@@ -104,13 +125,17 @@ export class TranscriptModel {
 	#entries: TranscriptEntry[] = [];
 	#toolIndex = new Map<string, number>();
 	/**
-	 * `role:timestamp` of every non-streaming message already rendered.
+	 * `role:timestamp` of every message rendered, to the entry that renders it.
 	 *
 	 * A user message is emitted twice — once on `message_start`, once on
 	 * `message_end`, both carrying the identical payload — so without this the
 	 * transcript shows every prompt twice. Verified against a live turn.
+	 *
+	 * It keeps the index and not just the key because `hydrate` rebuilds the
+	 * array: after a reload the position of the message being streamed into is
+	 * gone, and identity is the only handle onto it that survives.
 	 */
-	#seen = new Set<string>();
+	#messageIndex = new Map<string, number>();
 	/** Index of the assistant message currently streaming, if any. */
 	#openMessage = -1;
 	#seq = 0;
@@ -128,7 +153,7 @@ export class TranscriptModel {
 	clear(): void {
 		this.#entries = [];
 		this.#toolIndex.clear();
-		this.#seen.clear();
+		this.#messageIndex.clear();
 		this.#openMessage = -1;
 		this.#dirty = true;
 	}
@@ -141,6 +166,7 @@ export class TranscriptModel {
 	 * in explicitly, or the chat opens blank.
 	 */
 	hydrate(messages: readonly unknown[]): void {
+		const live = this.#liveTail();
 		this.clear();
 		const calls = collectToolCalls(messages);
 
@@ -189,16 +215,57 @@ export class TranscriptModel {
 			}
 
 			if (!RENDERED_ROLES.has(role)) continue;
+			const timestamp = numberOr(raw.timestamp);
+			// Only a stamped message has an identity a live frame can match. The
+			// digest fallback is a guess: every assistant message whose content is
+			// nothing but tool calls digests to the same empty string, and a live
+			// frame that hashed to it would be written into that old bubble.
+			if (timestamp !== undefined) {
+				this.#messageIndex.set(messageKey(role, timestamp, content), this.#entries.length);
+			}
 			this.#entries.push({
 				kind: "message",
 				id: `m${++this.#seq}`,
 				role,
 				content,
 				streaming: false,
+				timestamp,
 			});
-			if (typeof raw.timestamp === "number") this.#seen.add(`${role}:${raw.timestamp}`);
 		}
+		this.#restoreLiveTail(live);
 		this.#dirty = true;
+	}
+
+	/** The entries a `get_messages` snapshot cannot contain — see `LiveTail`. */
+	#liveTail(): LiveTail {
+		return {
+			message: this.#openMessage >= 0 ? (this.#entries[this.#openMessage] as MessageEntry) : null,
+			tools: this.#entries.filter((entry): entry is ToolEntry => entry.kind === "tool" && entry.running),
+		};
+	}
+
+	/** Put the in-flight tail back on the end of the freshly rebuilt history. */
+	#restoreLiveTail(live: LiveTail): void {
+		for (const tool of live.tools) {
+			// A call whose result landed between the snapshot and here is already
+			// rebuilt from its persisted `toolResult`; re-appending would draw the
+			// same call twice, once finished and once still spinning.
+			if (this.#toolIndex.has(tool.id)) continue;
+			this.#toolIndex.set(tool.id, this.#entries.length);
+			this.#entries.push(tool);
+		}
+
+		if (!live.message) return;
+		const key = messageKey(live.message.role, live.message.timestamp, live.message.content);
+		// Already in the answer: `message_end` reached the server before the
+		// snapshot was taken, so this one is finished, not in flight. Adopting it
+		// as the open message pointed `#openMessage` at a settled bubble, and the
+		// next turn's first frame — a different message, so no identity match —
+		// fell back to that index and overwrote it, above its own prompt.
+		if (this.#messageIndex.has(key)) return;
+		this.#messageIndex.set(key, this.#entries.length);
+		this.#entries.push(live.message);
+		this.#openMessage = this.#entries.length - 1;
 	}
 
 	/**
@@ -268,39 +335,62 @@ export class TranscriptModel {
 
 		const content = Array.isArray(raw.content) ? (raw.content as ContentBlock[]) : [];
 
+		const timestamp = numberOr(raw.timestamp);
+		const key = messageKey(role, timestamp, content);
+
 		// A user message is its own entry: never streamed, never replacing the
 		// assistant message in flight. It arrives twice (start + end), so the
 		// timestamp is what keeps one prompt from rendering as two bubbles.
 		if (role === "user") {
-			const key = `user:${typeof raw.timestamp === "number" ? raw.timestamp : messageDigest(content)}`;
-			if (this.#seen.has(key)) return false;
-			this.#seen.add(key);
+			if (this.#messageIndex.has(key)) return false;
+			this.#messageIndex.set(key, this.#entries.length);
 			this.#entries.push({
 				kind: "message",
 				id: `m${++this.#seq}`,
 				role,
 				content,
 				streaming: false,
+				timestamp,
 			});
+			// A prompt ends whatever the model was writing: a turn that died without
+			// its `message_end` — an abort, a killed sidecar — used to leave
+			// `#openMessage` on a bubble that the next reply then overwrote, above
+			// this prompt.
+			this.#openMessage = -1;
 			this.#dirty = true;
 			return true;
 		}
 
-		if (this.#openMessage >= 0) {
-			const existing = this.#entries[this.#openMessage] as MessageEntry;
-			this.#entries[this.#openMessage] = { ...existing, content, streaming: !final };
+		/*
+		 * Identity before position. `#openMessage` indexes an array `hydrate`
+		 * throws away, so a reload during a live turn — the case `reloadMessages`
+		 * exists to serve, since `get_messages` has no busy guard — left the
+		 * message still being written with no open index, and the next frame for
+		 * it opened a second bubble. The stamp is minted once when the stream is
+		 * created and never restamped, so it survives the rebuild.
+		 */
+		const index = this.#messageIndex.get(key) ?? this.#openMessage;
+		if (index >= 0) {
+			const existing = this.#entries[index] as MessageEntry;
+			this.#entries[index] = { ...existing, content, streaming: !final, timestamp };
+			if (final) this.#messageIndex.delete(key);
+			this.#openMessage = final ? -1 : index;
 		} else {
+			// A finished message takes no further frame, so it keeps no identity: a
+			// leftover key is a trap for the next message stamped the same
+			// millisecond, which would be written into the older bubble.
+			if (!final) this.#messageIndex.set(key, this.#entries.length);
 			this.#entries.push({
 				kind: "message",
 				id: `m${++this.#seq}`,
 				role,
 				content,
 				streaming: !final,
+				timestamp,
 			});
-			this.#openMessage = this.#entries.length - 1;
+			this.#openMessage = final ? -1 : this.#entries.length - 1;
 		}
 
-		if (final) this.#openMessage = -1;
 		this.#dirty = true;
 		return true;
 	}
@@ -310,7 +400,13 @@ export class TranscriptModel {
 		if (!id) return false;
 
 		// A tool call ends the assistant message that requested it; anything the
-		// model says afterwards belongs to a new bubble.
+		// model says afterwards belongs to a new bubble. Its identity goes with it
+		// — the server closes the message first, so this only fires for one it
+		// never closed, and leaving the key would let the next frame reopen it.
+		if (this.#openMessage >= 0) {
+			const open = this.#entries[this.#openMessage] as MessageEntry;
+			this.#messageIndex.delete(messageKey(open.role, open.timestamp, open.content));
+		}
 		this.#openMessage = -1;
 
 		this.#toolIndex.set(id, this.#entries.length);
@@ -349,6 +445,11 @@ export class TranscriptModel {
 		this.#dirty = true;
 		return true;
 	}
+}
+
+/** The identity a message frame carries, and the one an entry keeps. */
+function messageKey(role: string, timestamp: number | undefined, content: readonly ContentBlock[]): string {
+	return `${role}:${timestamp ?? messageDigest(content)}`;
 }
 
 /** Fallback identity for a message with no timestamp. */

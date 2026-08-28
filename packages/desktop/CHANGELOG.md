@@ -32,6 +32,7 @@
 - A failed history reload on re-attach now says so in the tab, instead of rendering a live session as an empty new chat.
 - Returning to a session after visiting Settings no longer aborts the turn that was running.
 - Re-attaching to a session already in progress now shows its conversation instead of an empty transcript.
+- Reloading a session's history while a turn is running no longer drops the reply being written or the tool card still spinning.
 - Starting a chat in a folder used earlier in the same run no longer silently re-attaches to that earlier chat.
 - Clicking your own chat's row no longer opens a second process on the same session file.
 - A session you have just started now appears in the sidebar without restarting the app.
