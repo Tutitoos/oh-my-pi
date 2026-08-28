@@ -5,6 +5,30 @@ import type { RpcBridge } from "./bridge";
 const ONESHOT_TIMEOUT_MS = 60_000;
 
 /**
+ * Who may speak for a session right now.
+ *
+ * Three states, because two of them used to be one. A missing bridge meant both
+ * "nothing is running, the throwaway below is safe" and "something is running and
+ * this webview cannot reach it", and every caller read it as the first — which is
+ * how a rename from Settings put a second agent on a live jsonl. The dangerous
+ * state is now spelled out, and it has no value that can be mistaken for the safe
+ * one.
+ */
+export type SessionProcess =
+	/** Nothing has this session open. */
+	| { kind: "none" }
+	/** A mounted view holds the handle; its process does the work. */
+	| { kind: "mounted"; bridge: RpcBridge }
+	/** A sidecar owns the session and nothing in this webview can talk to it. */
+	| { kind: "detached" };
+
+/**
+ * Why a detached session refuses — in the menu's `disabled` and in the banner.
+ * One string, so the greyed entry and the failure cannot disagree.
+ */
+export const SESSION_DETACHED = "Open this session first — its process has the file open";
+
+/**
  * Run one command against a session that nobody has open.
  *
  * Two rules, and both were paid for.
@@ -45,22 +69,38 @@ export async function oneshot<T>(cwd: string, sessionPath: string, command: Reco
 
 /** Rename, wherever the session happens to live. */
 export async function renameSession(
-	target: { bridge?: RpcBridge; cwd: string; sessionPath: string },
+	target: { process: SessionProcess; cwd: string; sessionPath: string },
 	name: string,
 ): Promise<void> {
-	if (target.bridge) return target.bridge.setSessionName(name);
-	await oneshot(target.cwd, target.sessionPath, { type: "set_session_name", name });
+	switch (target.process.kind) {
+		case "mounted":
+			return target.process.bridge.setSessionName(name);
+		case "detached":
+			throw new Error(SESSION_DETACHED);
+		case "none":
+			await oneshot(target.cwd, target.sessionPath, { type: "set_session_name", name });
+	}
 }
 
 /** Export, wherever the session happens to live. Answers with the file written. */
 export async function exportSession(
-	target: { bridge?: RpcBridge; cwd: string; sessionPath: string },
+	target: { process: SessionProcess; cwd: string; sessionPath: string },
 	outputPath: string,
 ): Promise<string> {
-	if (target.bridge) return target.bridge.exportHtml(outputPath);
-	const data = await oneshot<{ path: string }>(target.cwd, target.sessionPath, {
-		type: "export_html",
-		outputPath,
-	});
-	return data?.path ?? outputPath;
+	switch (target.process.kind) {
+		case "mounted":
+			return target.process.bridge.exportHtml(outputPath);
+		case "detached":
+			// That the export itself only reads is beside the point: the throwaway
+			// gets there through `switch_session`, which loads the jsonl into a
+			// second live agent.
+			throw new Error(SESSION_DETACHED);
+		case "none": {
+			const data = await oneshot<{ path: string }>(target.cwd, target.sessionPath, {
+				type: "export_html",
+				outputPath,
+			});
+			return data?.path ?? outputPath;
+		}
+	}
 }

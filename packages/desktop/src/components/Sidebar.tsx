@@ -23,7 +23,7 @@ import {
 import { exportSession, renameSession } from "../rpc/sessionOps";
 import { isTauri } from "../rpc/transport";
 import { getSnapshot, subscribe, type TabState } from "../shell/activity";
-import { bridgeFor, liveBridgeFor, liveTabs } from "../shell/bridges";
+import { bridgeFor, liveTabs, sessionProcess } from "../shell/bridges";
 import { writeClipboard } from "../shell/clipboard";
 import { coalesce } from "../shell/coalesce";
 import { useContextMenu } from "../shell/contextMenu";
@@ -179,7 +179,7 @@ export function Sidebar({
 			openMenu(
 				event,
 				sessionMenuItems(
-					{ live: hasProcess, hasProject: Boolean(project) },
+					{ live: hasProcess, attached: bridge !== undefined, hasProject: Boolean(project) },
 					{
 						open: () => onOpenSession(session),
 						rename: () => setPrompt({ kind: "rename", session }),
@@ -187,7 +187,7 @@ export function Sidebar({
 						reveal: () => void revealFolder(project).catch(report),
 						copySessionPath: () => void writeClipboard(session.path).catch(report),
 						copyProjectPath: () => void writeClipboard(project).catch(report),
-						stop: () => void bridge?.stop().catch(report),
+						stop: () => void stopSession(tab?.tabId).catch(report),
 						remove: () => setPrompt({ kind: "delete", session }),
 					},
 				),
@@ -343,10 +343,10 @@ function RenamePrompt({
 		// Asked at the moment of acting, and asked of Rust. A bridge exists for any
 		// mounted view and sits at `idle` for background tabs, so trusting it here
 		// is what would send this rename into a second process on a live jsonl.
-		liveBridgeFor(tab?.tabId)
-			.then(bridge =>
+		sessionProcess(tab?.tabId)
+			.then(process =>
 				renameSession(
-					{ bridge, cwd: session.cwd || session.projectRoot || "", sessionPath: session.path },
+					{ process, cwd: session.cwd || session.projectRoot || "", sessionPath: session.path },
 					trimmed,
 				),
 			)
@@ -656,6 +656,25 @@ async function revealFolder(directory: string): Promise<void> {
 }
 
 /**
+ * Stop the process, whether or not this window is holding its handle.
+ *
+ * The entry is enabled from the pool's answer but used to act on the registry's,
+ * and the registry is empty on every route but the session one — so from Settings
+ * this was `undefined?.stop()`: an entry the menu had just enabled that did
+ * nothing at all while the sidecar kept running. `agent_kill` is the pool's own
+ * door, the one `DeletePrompt` already goes through, and Rust answers it with
+ * `Ok(())` when there is nothing to kill.
+ */
+async function stopSession(tabId: string | undefined): Promise<void> {
+	if (!tabId) return;
+	const process = await sessionProcess(tabId);
+	// A mounted bridge is preferred for one reason: it also fails everything it
+	// had in flight, which a bare kill leaves hanging until each request times out.
+	if (process.kind === "mounted") return process.bridge.stop();
+	await invoke("agent_kill", { tabId });
+}
+
+/**
  * Ask where, export there, then show it.
  *
  * The save dialog runs first so the file lands where you meant; `export_html`
@@ -676,7 +695,7 @@ async function exportTranscript(session: SessionNode, tabId: string | undefined)
 	// a second process on a live jsonl.
 	const written = await exportSession(
 		{
-			bridge: await liveBridgeFor(tabId),
+			process: await sessionProcess(tabId),
 			cwd: session.cwd || session.projectRoot || "",
 			sessionPath: session.path,
 		},

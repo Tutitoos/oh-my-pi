@@ -21,7 +21,7 @@ that way and are not listed.
 
 ## P0 · Correctness — data is lost or misattributed
 
-- [ ] **A1 · Rename and Export can put a second agent on a live session's transcript**
+- [x] **A1 · Rename and Export can put a second agent on a live session's transcript**
   `src/shell/bridges.ts` — `liveBridgeFor()` returns `undefined` the moment the
   in-webview registry has no bridge, without ever asking the Rust pool. The
   registry only holds a bridge while a `SessionRoute` is mounted, and `/manage`,
@@ -31,11 +31,17 @@ that way and are not listed.
   the pooled process still owns. The module's own doc comment names this hazard
   three lines above the code that commits it. `DeletePrompt` was fixed; `Rename`,
   `Export` and *Stop the process* were not.
-  **Done when:** with a session open in a tab, navigating to `/manage` and
-  renaming that session from the sidebar leaves `pgrep -cf "mode rpc-ui"`
-  unchanged, and `lsof` on its jsonl still reports exactly one process. The
-  return type must make the "live but unmounted" case impossible to mistake for
-  "no process" at a call site.
+  Closed by replacing `liveBridgeFor` with a three-state `sessionProcess`:
+  `none` (safe for a throwaway), `mounted` (use that bridge), `detached` (refuse).
+  Rename and Export refuse rather than route, because routing would mean a second
+  channel per tab in a relay that is deliberately protocol-ignorant; Stop is
+  routed, because killing needs no protocol. A rejected pool query now reads as
+  `detached` rather than as "nothing is running", which closes a second
+  corruption case the old code had.
+  **Known limitation:** the sidebar's greying uses a cached `live` snapshot, so a
+  sidecar evicted between refreshes can grey a rename with a message that is no
+  longer true. The act-time check in `sessionOps` is the actual safety; the
+  greying is only an affordance.
 
 - [ ] **A2 · An evicted in-app chat comes back as a different, empty session**
   `src/rpc/useBridge.ts` — `boot()` switches sessions only when a `sessionPath`
@@ -116,7 +122,7 @@ that way and are not listed.
   **Done when:** a diff that exceeds the capture window is refused or visibly
   marked, and never offered to the clipboard as a patch.
 
-- [ ] **B4 · "Stop the process" is a dead control from any non-session route**
+- [x] **B4 · "Stop the process" is a dead control from any non-session route**
   `src/components/Sidebar.tsx` — same root cause as A1. From `/manage`,
   `/onboarding` or `/probe` the menu item resolves no bridge and does nothing.
   **Done when:** stopping a live session from the sidebar while on `/manage`

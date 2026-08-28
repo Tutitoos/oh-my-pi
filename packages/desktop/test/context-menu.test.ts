@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { projectMenuItems, sessionMenuItems } from "../src/components/sessionMenu";
+import { SESSION_DETACHED } from "../src/rpc/sessionOps";
 import { type MenuItem, tidy } from "../src/shell/contextMenu";
 
 const noop = () => {};
@@ -25,7 +26,7 @@ function reasonFor(items: readonly MenuItem[], id: string): string | undefined {
 
 describe("sessionMenuItems", () => {
 	test("a live session in a project offers everything", () => {
-		const items = sessionMenuItems({ live: true, hasProject: true }, ACTIONS);
+		const items = sessionMenuItems({ live: true, attached: true, hasProject: true }, ACTIONS);
 
 		expect(labels(items)).toEqual([
 			"Open",
@@ -41,7 +42,7 @@ describe("sessionMenuItems", () => {
 	});
 
 	test("every disabled entry says why, rather than just going grey", () => {
-		const items = sessionMenuItems({ live: false, hasProject: false }, ACTIONS);
+		const items = sessionMenuItems({ live: false, attached: false, hasProject: false }, ACTIONS);
 		const off = items.filter(item => item.kind === "action" && item.disabled);
 
 		expect(off.length).toBeGreaterThan(0);
@@ -51,7 +52,7 @@ describe("sessionMenuItems", () => {
 	});
 
 	test("a session with no process cannot be stopped, and is told so", () => {
-		const items = sessionMenuItems({ live: false, hasProject: true }, ACTIONS);
+		const items = sessionMenuItems({ live: false, attached: false, hasProject: true }, ACTIONS);
 
 		expect(reasonFor(items, "stop")).toBe("This session has no process running");
 		// Renaming stays available: it routes through a throwaway process.
@@ -59,8 +60,20 @@ describe("sessionMenuItems", () => {
 		expect(reasonFor(items, "export")).toBeUndefined();
 	});
 
+	test("a live session this window has no handle on refuses rename and export", () => {
+		// You are on Settings: the pool still has the process, no session view is
+		// mounted, and "no bridge" used to mean "nothing is running".
+		const items = sessionMenuItems({ live: true, attached: false, hasProject: true }, ACTIONS);
+
+		expect(reasonFor(items, "rename")).toBe(SESSION_DETACHED);
+		expect(reasonFor(items, "export")).toBe(SESSION_DETACHED);
+		// Opening it is the way out, and stopping it needs no protocol at all.
+		expect(reasonFor(items, "open")).toBeUndefined();
+		expect(reasonFor(items, "stop")).toBeUndefined();
+	});
+
 	test("an old session with no recorded folder loses only the folder actions", () => {
-		const items = sessionMenuItems({ live: true, hasProject: false }, ACTIONS);
+		const items = sessionMenuItems({ live: true, attached: true, hasProject: false }, ACTIONS);
 
 		expect(reasonFor(items, "reveal")).toBe("This session recorded no project folder");
 		expect(reasonFor(items, "copy-project")).toBe("This session recorded no project folder");
@@ -68,7 +81,7 @@ describe("sessionMenuItems", () => {
 	});
 
 	test("delete is marked dangerous and sits last", () => {
-		const items = sessionMenuItems({ live: true, hasProject: true }, ACTIONS);
+		const items = sessionMenuItems({ live: true, attached: true, hasProject: true }, ACTIONS);
 		const last = items.at(-1);
 
 		expect(last?.kind === "action" && last.id).toBe("delete");

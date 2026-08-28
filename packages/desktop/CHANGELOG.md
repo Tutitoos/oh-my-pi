@@ -24,8 +24,12 @@
 - The transcript no longer re-renders on every keystroke.
 - A diff the shell cut short is no longer offered to the clipboard as a patch: it applied cleanly and wrote the wrong file. The panel says when what it is showing is incomplete.
 - Failures from the model picker and the approval-mode menu are shown instead of dropped.
+- Renaming or exporting a session whose process is running but whose view is not open now refuses instead of starting a second agent on the same transcript.
+- "Stop the process" works from Settings and the other non-session screens, where it used to do nothing while the sidecar kept running.
 - The working indicator's dots are round again; the previous fix lost to the flattener on specificity while claiming to have won.
 - Deleting a session now stops its process even when the session route is not mounted; the transcript used to be unlinked from under a running agent whose next write went to a file with no name.
+- Renaming or exporting a session from Settings no longer starts a second agent on a transcript the running one still has open; the menu says to open the session first.
+- "Stop the process" now stops it from Settings, where it was an enabled menu entry that did nothing at all.
 - A background turn is no longer the first thing evicted when a fourth tab opens: the pool now counts streaming output as activity, not just what the app types.
 - The pre-warmed spare counts against the three-process ceiling instead of quietly making it four.
 - A spare that finished starting after the pool had filled is now discarded instead of installed as a fourth process.

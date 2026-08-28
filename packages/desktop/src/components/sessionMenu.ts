@@ -1,3 +1,4 @@
+import { SESSION_DETACHED } from "../rpc/sessionOps";
 import type { MenuItem } from "../shell/contextMenu";
 
 /**
@@ -12,6 +13,12 @@ import type { MenuItem } from "../shell/contextMenu";
 export interface SessionMenuState {
 	/** The session has a process right now. */
 	live: boolean;
+	/**
+	 * ...and this window is holding its handle. Leaving the session route unmounts
+	 * every view while the pool keeps the sidecars, so a live session can be one
+	 * nothing here is able to speak to.
+	 */
+	attached: boolean;
 	/** Its project directory is known, so Finder and the path make sense. */
 	hasProject: boolean;
 }
@@ -31,11 +38,15 @@ export function sessionMenuItems(state: SessionMenuState, actions: SessionMenuAc
 	// An old session recorded no cwd; without one there is no folder to reveal
 	// and no project path to copy.
 	const noProject = state.hasProject ? undefined : "This session recorded no project folder";
+	// Live somewhere this window cannot reach — you are on Settings, so no session
+	// view is mounted. Both of these would otherwise fall through to a throwaway
+	// child that opens the jsonl a running agent is appending to.
+	const detached = state.live && !state.attached ? SESSION_DETACHED : undefined;
 
 	return [
 		{ kind: "action", id: "open", label: "Open", run: actions.open },
-		{ kind: "action", id: "rename", label: "Rename…", run: actions.rename },
-		{ kind: "action", id: "export", label: "Export to HTML…", run: actions.exportHtml },
+		{ kind: "action", id: "rename", label: "Rename…", disabled: detached, run: actions.rename },
+		{ kind: "action", id: "export", label: "Export to HTML…", disabled: detached, run: actions.exportHtml },
 		{ kind: "separator", id: "sep-1" },
 		{
 			kind: "action",

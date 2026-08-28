@@ -1,4 +1,5 @@
 import type { RpcBridge } from "../rpc/bridge";
+import type { SessionProcess } from "../rpc/sessionOps";
 import { isTauri, TauriTransport } from "../rpc/transport";
 
 /**
@@ -25,7 +26,8 @@ export function bridgeFor(tabId: string | undefined): RpcBridge | undefined {
 }
 
 /**
- * The bridge for a tab that genuinely has a process behind it.
+ * Who has this tab's session open, as far as anything outside a session view can
+ * tell.
  *
  * `bridgeFor` answers for any mounted session view, and a view stays mounted
  * with its bridge sitting at `idle` when it is not the visible tab — its boot is
@@ -33,16 +35,21 @@ export function bridgeFor(tabId: string | undefined): RpcBridge | undefined {
  * mean less than they look: after any route change every background tab reports
  * idle while its sidecar is alive in the pool.
  *
- * Rust owns the processes, so Rust is asked. This matters beyond a greyed menu
- * item: a caller that wrongly concludes "no process" falls through to the
- * throwaway path, and that puts a second agent on a live session's jsonl.
+ * Rust owns the processes, so Rust is asked. And the answer is three-valued on
+ * purpose: leaving the session route unmounts every view while the pool keeps the
+ * sidecars, so "this webview has no bridge" is not "nothing is running". Calling
+ * that `none` is what sent a rename into a throwaway child and put two agents on
+ * one jsonl.
  */
-export async function liveBridgeFor(tabId: string | undefined): Promise<RpcBridge | undefined> {
-	if (!tabId || !isTauri()) return undefined;
+export async function sessionProcess(tabId: string | undefined): Promise<SessionProcess> {
+	if (!tabId || !isTauri()) return { kind: "none" };
 	const bridge = bridges.get(tabId);
-	if (!bridge) return undefined;
 	const status = await new TauriTransport().poolStatus().catch(() => null);
-	return status?.tabs.includes(tabId) ? bridge : undefined;
+	// Only a pool that answered may say "nothing is running". A rejected
+	// `agent_pool_status` falls through to the line below, where a missing bridge
+	// reads as detached: refusing costs a rename, guessing costs the transcript.
+	if (status && !status.tabs.includes(tabId)) return { kind: "none" };
+	return bridge ? { kind: "mounted", bridge } : { kind: "detached" };
 }
 
 /** Tab ids the Rust pool currently has a process for. */
