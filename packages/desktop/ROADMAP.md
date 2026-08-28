@@ -249,11 +249,16 @@ that way and are not listed.
 
 ## P4 · Pull request hygiene
 
-- [ ] **E1 · The branch is behind its base** — `main` has moved 115 commits since
+- [x] **E1 · The branch is behind its base** — `main` has moved 115 commits since
   the last merge, and GitHub reports the PR as conflicting. `git merge-tree`
   against the current base reports zero conflicts, so this is a merge and a push,
   with nothing to resolve by hand.
-  **Done when:** the PR reports mergeable again.
+  Merged; zero conflicts, as `git merge-tree` predicted. It did break one thing
+  the merge itself could not see: upstream replaced `utils/git` with the `pi-vcs`
+  crate, and `omp sessions --json` — this package's data source — imported the
+  deleted module. Ported to `vcs.gitInfo`, with the attribution rule extracted as
+  a pure function so it stays testable on a machine whose prebuilt native addon
+  predates that crate, which is every machine that cannot build it.
 
 - [ ] **E2 · Review threads left open that later commits closed** — several
   threads point at code that has since changed. Resolving them with a pointer to

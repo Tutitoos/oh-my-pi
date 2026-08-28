@@ -13,8 +13,31 @@
  */
 
 import * as path from "node:path";
+import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { listAllSessions, type SessionInfo } from "../session/session-listing";
-import { repo } from "../utils/git";
+
+/**
+ * Which project a session's directory belongs to, and whether it is a worktree.
+ *
+ * A linked worktree keeps its own `gitDir` while `commonDir` still points at the
+ * primary checkout's `.git`, so the two differing IS the test — no
+ * pattern-matching on folder names, and it covers a worktree the user made and
+ * one `omp worktree` manages under `~/.omp/wt` alike. `commonDir` is that
+ * primary's `.git`, so its parent is the primary root.
+ *
+ * Pure and exported so the rule can be tested without the native binding, which
+ * is exactly what a stale addon takes away.
+ */
+export function projectOf(
+	cwd: string,
+	info: { repoRoot: string; gitDir: string; commonDir: string } | null,
+): { projectRoot: string; isWorktree: boolean } {
+	if (!info) return { projectRoot: cwd, isWorktree: false };
+	if (info.gitDir !== info.commonDir) {
+		return { projectRoot: path.dirname(info.commonDir), isWorktree: true };
+	}
+	return { projectRoot: info.repoRoot, isWorktree: false };
+}
 
 export interface SessionListEntry {
 	path: string;
@@ -57,15 +80,18 @@ function makeProjectResolver() {
 
 		let resolved: { projectRoot: string; isWorktree: boolean };
 		try {
-			const linked = repo.linkedWorktreeSync(cwd);
-			if (linked) {
-				resolved = { projectRoot: linked.primaryRoot, isWorktree: true };
-			} else {
-				resolved = { projectRoot: repo.primaryRootSync(cwd) ?? cwd, isWorktree: false };
-			}
+			resolved = projectOf(cwd, vcs.gitInfo(cwd));
 		} catch {
-			// A deleted or unreadable directory is not an error here — the session
-			// still exists and should still be listed, just ungrouped.
+			/*
+			 * A deleted or unreadable directory is not an error here — the session
+			 * still exists and should still be listed, just ungrouped.
+			 *
+			 * This also catches a native addon too old to carry `vcs`, in which case
+			 * every session lists as its own project. That degrades grouping rather
+			 * than failing the command, which is the right trade for a listing — but
+			 * it is a silent degrade, so `projectOf` is kept pure and tested
+			 * separately: the decision stays verifiable where the binding is not.
+			 */
 			resolved = { projectRoot: cwd, isWorktree: false };
 		}
 

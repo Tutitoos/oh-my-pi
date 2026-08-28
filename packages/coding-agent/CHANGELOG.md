@@ -18,6 +18,7 @@
 ### Fixed
 
 - Fixed `set_plan_mode: false` over the `rpc-ui` protocol leaving the running turn planning under the plan-mode toolset; it now interrupts that turn, like the terminal's `/plan` toggle. Approving a plan still exits without interrupting.
+- Fixed `omp sessions --json` failing to build after the pi-vcs migration; worktrees are attributed to their primary checkout again.
 ## [18.0.9] - 2026-08-28
 
 ### Breaking Changes
